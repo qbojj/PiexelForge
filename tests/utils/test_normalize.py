@@ -1,10 +1,10 @@
 from amaranth import *
-from amaranth.sim import Simulator, Tick
+from amaranth.sim import Simulator
 
-from utils.math import FixedPoint, FixedPointVecNormalize, Vector3
+from gpu.utils.math import FixedPoint, FixedPointVecNormalize, Vector3
 
 rst = Signal(1)
-dut = ResetInserter({"sync": rst})(FixedPointVecNormalize(Vector3, 5))
+dut = ResetInserter({"sync": rst})(FixedPointVecNormalize(Vector3))
 
 
 async def tb_operation(data, expected, ctx):
@@ -13,56 +13,51 @@ async def tb_operation(data, expected, ctx):
     await ctx.tick()
     ctx.set(rst, 0)
     await ctx.tick()
-    
+
     print()
     print(f"Testing with input: {data}")
-    
+
     ctx.set(dut.value, [FixedPoint.from_float_const(v) for v in data])
     ctx.set(dut.start, 1)
-    
+
     await ctx.tick()
     ctx.set(dut.start, 0)
     await ctx.tick()
-    
+
     print("Waiting for ready signal...")
-    
+
     while not ctx.get(dut.ready):
         await ctx.tick()
-    
+
     result = ctx.get(dut.result)
     result = [ctx.get(r.data) / (1 << FixedPoint.lo_bits) for r in result]
     print(f"got {result}; expected {expected}")
-    
 
-async def tb_multi(ctx):
+    if not all(abs(r - e) < 5e-3 for r, e in zip(result, expected)):
+        raise AssertionError("Test failed!")
+
+
+async def tb_normalize(ctx):
     # Test cases: (input_vector, expected_normalized_vector)
     test_cases = []
-    
+
     # Unit vectors are already normalized
-    test_cases.append(([1.0, 0.0, 0.0],
-                       [1.0, 0.0, 0.0]))
-    
-    test_cases.append(([0.0, 1.0, 0.0],
-                       [0.0, 1.0, 0.0]))
-    
-    test_cases.append(([0.0, 0.0, 1.0],
-                       [0.0, 0.0, 1.0]))
-    
+    test_cases.append(([1.0, 0.0, 0.0], [1.0, 0.0, 0.0]))
+
+    test_cases.append(([0.0, 1.0, 0.0], [0.0, 1.0, 0.0]))
+
+    test_cases.append(([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]))
+
     # 3-4-5 triangle
-    test_cases.append(([3.0, 4.0, 0.0],
-                       [0.6, 0.8, 0.0]))
-    
+    test_cases.append(([3.0, 4.0, 0.0], [0.6, 0.8, 0.0]))
+
     for data, expected in test_cases:
         await tb_operation(data, expected, ctx)
         await ctx.tick().repeat(5)
-    
-  
-sim = Simulator(dut)
-sim.add_clock(1e-6)  # 1 MHz clock
-sim.add_testbench(tb_multi)
-with sim.write_vcd(
-    "test.vcd",
-    "test.gtkw",
-    traces=[rst] + [dut.value, dut.start] + [dut.result, dut.ready],
-):
+
+
+def test_normalize():
+    sim = Simulator(dut)
+    sim.add_clock(1e-6)
+    sim.add_testbench(tb_normalize)
     sim.run()

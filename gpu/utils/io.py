@@ -112,7 +112,7 @@ class Debouncer(wiring.Component):
         return m
 
 
-class EdgeDetector_DB(wiring.Component):
+class EdgeDetectorDB(wiring.Component):
     i: In(1)
     rising_edge: Out(1)
     falling_edge: Out(1)
