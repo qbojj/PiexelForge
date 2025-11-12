@@ -1,0 +1,7 @@
+**/__pycache__/
+test.vcd
+test.gtkw
+
+.vscode
+.qsys_edit
+.pytest_cache
