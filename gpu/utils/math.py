@@ -394,12 +394,11 @@ class FixedPointInvSqrt(wiring.Component):
                 with m.If(inv_sqrt_small.ready):
                     # shift back: sqrt gets half the normalization shift
                     # divide by 2^floor(shift_value/2)
-                    v1 = self.type.change_radix(
-                        small_type(
-                            do_shift_by(
-                                inv_sqrt_data_out.data.as_unsigned(),
-                                shift_value[1:].as_signed(),
-                            )
+                    v1 = self.type(
+                        do_shift_by(
+                            inv_sqrt_data_out.data.as_unsigned(),
+                            shift_value[1:].as_signed()
+                            + (self.type.lo_bits - small_type.lo_bits),
                         )
                     )
                     m.d.sync += norm_value.eq(v1)
