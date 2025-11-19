@@ -57,6 +57,11 @@ class FixedPointView(data.View):
         s = self.shape()
         return s((self.data * o.data)[s.lo_bits : s.lo_bits + s.total_bits])
 
+    def eq_reinterpret(self, o: "FixedPointView") -> "FixedPointView":
+        """self.eq but with reinterpretation of fixed point format"""
+        o = self.shape().change_radix(o)
+        return self.eq(o)
+
     def format(self, format_spec):
         fract_bits = len(self.fract)
 
@@ -103,9 +108,21 @@ Vector2 = data.ArrayLayout(FixedPoint, 2)
 Vector3 = data.ArrayLayout(FixedPoint, 3)
 Vector4 = data.ArrayLayout(FixedPoint, 4)
 
-texture_coord_shape = unsigned(12)
+# fixed point as it is stored in memory
+FixedPoint_mem = FixedPointLayout(lo_bits=16, hi_bits=16)
+Vector2_mem = data.ArrayLayout(FixedPoint_mem, 2)
+Vector3_mem = data.ArrayLayout(FixedPoint_mem, 3)
+Vector4_mem = data.ArrayLayout(FixedPoint_mem, 4)
+
+# collumn-major matrices
+Matrix4_mem = data.ArrayLayout(FixedPoint_mem, 16)
+Matrix3_mem = data.ArrayLayout(FixedPoint_mem, 9)
+
+
+texture_coord_shape = unsigned(12)  # Max 4kx4k textures
 address_shape = unsigned(32)
 stride_shape = unsigned(16)
+index_shape = unsigned(32)
 
 
 class IndexKind(enum.Enum, shape=2):

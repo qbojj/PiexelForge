@@ -3,7 +3,6 @@ from amaranth.lib import data
 
 from .types import (
     FixedPoint,
-    Vector2,
     Vector3,
     Vector4,
     address_shape,
@@ -11,11 +10,9 @@ from .types import (
     texture_coord_shape,
 )
 
-texture_coords = data.ArrayLayout(Vector2, 2)
-
-# Max 4kx4k textures
 num_textures = 2
-texture_position = data.ArrayLayout(unsigned(texture_coord_shape), num_textures)
+texture_coords = data.ArrayLayout(Vector4, num_textures)
+texture_position = data.ArrayLayout(texture_coord_shape, 2)
 
 
 class VertexLayout(data.Struct):
@@ -26,9 +23,9 @@ class VertexLayout(data.Struct):
 
 
 class ShadingVertexLayout(data.Struct):
-    position_world: Vector4
-    position_view: Vector4  # In homogeneous coordinates after w-divide
-    normal_world: Vector3
+    position_view: Vector4
+    position_proj: Vector4  # In homogeneous coordinates after w-divide
+    normal_view: Vector3
     texcoords: texture_coords  # After transforms
     color: Vector4
 

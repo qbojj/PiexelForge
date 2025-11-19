@@ -1,23 +1,22 @@
-from amaranth import *
 from amaranth.lib import data, enum
 
+from ..utils.types import Vector4_mem, address_shape, stride_shape
 
-class VertexInputAttributeDescription(data.Struct):
-    class InputMode(enum.Enum, shape=1):
-        CONSTANT = 0
-        PER_VERTEX = 1
+__all__ = ["InputMode", "InputData"]
 
-    input_mode: InputMode
-    data: data.UnionLayout(
-        {
-            "per_vertex": data.StructLayout(
-                {
-                    "address": address_shape,
-                    "stride": stride_shape,
-                    # for now assume format (FixedPoint 16.16) for all attributes
-                    # with appropriate number of components
-                }
-            ),
-            "constant_value": Vector4,
-        }
-    )
+
+class InputMode(enum.Enum, shape=1):
+    CONSTANT = 0
+    PER_VERTEX = 1
+
+
+class PerVertexData(data.Struct):
+    address: address_shape
+    stride: stride_shape
+    # for now assume format (FixedPoint 16.16) for all attributes
+    # with appropriate number of components
+
+
+class InputData(data.Union):
+    per_vertex: PerVertexData
+    constant_value: Vector4_mem

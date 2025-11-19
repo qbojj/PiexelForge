@@ -5,9 +5,8 @@ from amaranth_soc import csr
 
 from ..utils.bus import internal_gpu_bus
 from ..utils.layouts import VertexLayout, num_textures
-from ..utils.types import IndexKind, InputTopology, address_shape
-from .layouts import VertexInputAttributeDescription, VertexInputAttributes
-from .types import index_shape
+from ..utils.types import IndexKind, InputTopology, address_shape, index_shape
+from .layouts import InputData, InputMode
 
 __all__ = [
     "IndexGenerator",
@@ -24,38 +23,34 @@ class IndexGenerator(wiring.Component):
     TODO: add memory burst support
     """
 
-    index_stream: Out(stream.Signature(index_shape))
+    os_index: Out(stream.Signature(index_shape))
 
     bus: Out(internal_gpu_bus)
-    csr_bus: In(csr.Signature(addr_width=4, data_width=8))
 
     ready: Out(1)
-
-    class IndexStreamDescription(csr.Register, access="rw"):
-        address: csr.Field(csr.action.RW, address_shape)
-        count: csr.Field(csr.action.RW, index_shape)
-        kind: csr.Field(csr.action.RW, IndexKind)
 
     def __init__(self):
         super().__init__()
         regs = csr.Builder(addr_width=4, data_width=8)
-        self.config = regs.add("index_input", self.IndexStreamDescription())
         self.start = regs.add(
             "start", csr.Register(csr.Field(csr.action.W, unsigned(1)))
         )
+
+        self.address = regs.add("address", csr.Field(csr.action.RW, address_shape))
+        self.count = regs.add("count", csr.Field(csr.action.RW, unsigned(32)))
+        self.kind = regs.add("kind", csr.Field(csr.action.RW, IndexKind))
+
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus.memory_map = self.csr_bridge.memory_map
+        self.csr_bus = self.csr_bridge.bus
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
         m.submodules += [self.csr_bridge]
 
-        config = self.config.f
-
-        address = Signal.like(config.address.data)
-        kind = config.kind.data
-        count = config.count.data
+        address = Signal.like(self.address.f.data)
+        kind = self.kind.f.data
+        count = self.count.f.data
 
         index_increment = kind.matches(
             {
@@ -92,10 +87,8 @@ class IndexGenerator(wiring.Component):
 
         cur_idx = Signal.like(count)
 
-        with m.If(self.index_stream.ready):
-            m.d.sync += self.index_stream.valid.eq(0)
-
-        m.d.comb += self.ready.f.r_data.eq(0)
+        with m.If(self.os_index.ready):
+            m.d.sync += self.os_index.valid.eq(0)
 
         with m.FSM():
             with m.State("IDLE"):
@@ -103,7 +96,7 @@ class IndexGenerator(wiring.Component):
                 with m.If(self.start.f.w_data & self.start.f.w_stb):
                     m.d.sync += [
                         cur_idx.eq(0),
-                        address.eq(self.config.f.address.data),
+                        address.eq(self.address.f.data),
                     ]
                     with m.If(count == 0):
                         m.next = "IDLE"
@@ -113,10 +106,10 @@ class IndexGenerator(wiring.Component):
                         m.next = "MEM_READ_INIT"
 
             with m.State("STREAM_NON_INDEXED"):
-                with m.If(~self.index_stream.valid | self.index_stream.ready):
+                with m.If(~self.os_index.valid | self.os_index.ready):
                     m.d.sync += [
-                        self.index_stream.payload.eq(cur_idx),
-                        self.index_stream.valid.eq(1),
+                        self.os_index.payload.eq(cur_idx),
+                        self.os_index.valid.eq(1),
                         cur_idx.eq(cur_idx + 1),
                     ]
                     with m.If(cur_idx + 1 == count):  # last index streamed
@@ -153,24 +146,24 @@ class IndexGenerator(wiring.Component):
                     ]
                     m.next = "INDEX_SEND"
             with m.State("INDEX_SEND"):
-                with m.If(~self.index_stream.valid | self.index_stream.ready):
+                with m.If(~self.os_index.valid | self.os_index.ready):
                     next_addr = address + index_increment
                     m.d.sync += [
-                        self.index_stream.payload.eq(extended_data),
-                        self.index_stream.valid.eq(1),
+                        self.os_index.payload.eq(extended_data),
+                        self.os_index.valid.eq(1),
                         address.eq(next_addr),
                         cur_idx.eq(cur_idx + 1),
                     ]
                     with m.If(cur_idx + 1 == count):
                         m.next = "WAIT_FLUSH"
-                    with m.Elif(next_addr[0:offset_bits] != 0):
+                    with m.Elif(next_addr[0 : len(offset)] != 0):
                         m.next = "INDEX_SEND"
                     with m.Else():
                         m.next = (
                             "MEM_READ_INIT"  # crossed word boundary -> read next word
                         )
             with m.State("WAIT_FLUSH"):
-                with m.If(~self.index_stream.valid | self.index_stream.ready):
+                with m.If(~self.os_index.valid | self.os_index.ready):
                     m.next = "IDLE"
 
         return m
@@ -182,24 +175,30 @@ class InputTopologyProcessor(wiring.Component):
     Gets input index stream and outputs vertex index stream based on input topology.
     """
 
-    index_stream: In(stream.Signature(index_shape))
-    index_stream_output: Out(stream.Signature(index_shape))
-
-    csr_bus: In(csr.Signature(addr_width=4, data_width=8))
+    is_index: In(stream.Signature(index_shape))
+    os_index: Out(stream.Signature(index_shape))
 
     ready: Out(1)
-
-    class InputTopologyDescription(csr.Register, access="rw"):
-        input_topology: csr.Field(csr.action.RW, InputTopology)
-        primitive_restart_enable: csr.Field(csr.action.RW, unsigned(1))
-        primitive_restart_index: csr.Field(csr.action.RW, index_shape)
 
     def __init__(self):
         super().__init__()
         regs = csr.Builder(addr_width=4, data_width=8)
-        self.config = regs.add("topology", self.InputTopologyDescription())
+
+        self.input_topology = regs.add(
+            "input_topology", csr.Field(csr.action.RW, InputTopology)
+        )
+        self.primitive_restart_enable = regs.add(
+            "primitive_restart_enable", csr.Field(csr.action.RW, unsigned(1))
+        )
+        self.primitive_restart_index = regs.add(
+            "primitive_restart_index", csr.Field(csr.action.RW, unsigned(32))
+        )
+        self.base_vertex = regs.add(
+            "base_vertex", csr.Field(csr.action.RW, unsigned(32))
+        )
+
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus.memory_map = self.csr_bridge.memory_map
+        self.csr_bus = self.csr_bridge.bus
 
     def elaborate(self, platform) -> Module:
         m = Module()
@@ -209,7 +208,7 @@ class InputTopologyProcessor(wiring.Component):
         # values for triangle strips/fans and line strips
         v1 = Signal(index_shape)
         v2 = Signal(index_shape)
-        vertex_count = Signal(3)
+        vertex_count = Signal(2)
 
         # max 3 output indices per input index
         max_amplification = 3
@@ -219,17 +218,19 @@ class InputTopologyProcessor(wiring.Component):
         ready_for_input = Signal()
 
         m.d.comb += self.ready.eq(
-            ready_for_input & ~self.index_stream.valid & ~self.index_stream_output.valid
+            ready_for_input & ~self.is_index.valid & ~self.os_index.valid
         )
         m.d.comb += ready_for_input.eq(to_send_left == 0)
 
-        with m.If(self.index_stream_output.ready):
+        with m.If(self.os_index.ready):
             with m.Switch(to_send_left):
                 for i in range(1, max_amplification + 1):
                     with m.Case(i):
                         m.d.sync += [
-                            self.index_stream_output.payload.eq(to_send[i - 1]),
-                            self.index_stream_output.valid.eq(1),
+                            self.os_index.payload.eq(
+                                to_send[i - 1] + self.base_vertex.f.data
+                            ),
+                            self.os_index.valid.eq(1),
                             to_send_left.eq(to_send_left - 1),
                         ]
 
@@ -237,27 +238,27 @@ class InputTopologyProcessor(wiring.Component):
                             # last one being sent -> we are ready for new input
                             m.d.comb += ready_for_input.eq(1)
                 with m.Default():
-                    m.d.sync += self.index_stream_output.valid.eq(0)
+                    m.d.sync += self.os_index.valid.eq(0)
 
-        with m.If(self.index_stream.valid & ready_for_input):
-            m.d.comb += self.index_stream.ready.eq(1)
-            idx = self.index_stream.payload
+        with m.If(self.is_index.valid & ready_for_input):
+            m.d.comb += self.is_index.ready.eq(1)
+            idx = self.is_index.payload
 
             with m.If(
-                self.config.f.primitive_restart_enable.data
-                & (idx == self.config.f.primitive_restart_index.data)
+                self.primitive_restart_enable.f.data
+                & (idx == self.primitive_restart_index.f.data)
             ):
                 m.d.sync += vertex_count.eq(0)  # reset on primitive restart
             with m.Else():
-                with m.Switch(self.config.f.input_topology.data):
+                with m.Switch(self.input_topology.f.data):
                     with m.Case(
                         InputTopology.POINT_LIST,
                         InputTopology.LINE_LIST,
                         InputTopology.TRIANGLE_LIST,
                     ):
                         m.d.sync += [
-                            self.index_stream_output.p.eq(idx),
-                            self.index_stream_output.valid.eq(1),
+                            self.os_index.p.eq(idx),
+                            self.os_index.valid.eq(1),
                         ]
                     with m.Case(InputTopology.LINE_STRIP):
                         with m.If(vertex_count == 0):
@@ -278,13 +279,13 @@ class InputTopologyProcessor(wiring.Component):
                                 m.d.sync += [
                                     v1.eq(idx),
                                     vertex_count.eq(1),
-                                    self.index_stream.ready.eq(1),
+                                    self.is_index.ready.eq(1),
                                 ]
                             with m.Case(1):
                                 m.d.sync += [
                                     v2.eq(idx),
                                     vertex_count.eq(2),
-                                    self.index_stream.ready.eq(1),
+                                    self.is_index.ready.eq(1),
                                 ]
                             with m.Case(2):
                                 # Odd triangle -> indexes n, n+1, n+2
@@ -345,42 +346,55 @@ class InputAssembly(wiring.Component):
     Also exposes following registers:
     - vertex_input_attributes: VertexInputAttributes - information about vertex attributes
 
-    TODO: support other formats than Fixed 16.16 x number of components
+    TODO: support other formats than Fixed 16.16
     """
 
-    index_stream: In(stream.Signature(index_shape))
-    vertex_stream: Out(stream.Signature(VertexLayout))
+    is_index: In(stream.Signature(index_shape))
+    os_vertex: Out(stream.Signature(VertexLayout))
 
     bus: Out(internal_gpu_bus)
-    csr_bus: In(csr.Signature(addr_width=4, data_width=8))
 
     ready: Out(1)
 
-    class VertexInputAttributes(csr.Register, access="rw"):
+    class InputModeReg(csr.Register, access="rw"):
         def __init__(self):
-            super().__init__(
-                {
-                    "position": csr.Field(
-                        csr.action.RW, VertexInputAttributeDescription
-                    ),
-                    "normal": csr.Field(csr.action.RW, VertexInputAttributeDescription),
-                    "texcoords": [
-                        csr.Field(csr.action.RW, VertexInputAttributeDescription)
-                        for _ in range(num_textures)
-                    ],
-                    "color": csr.Field(csr.action.RW, VertexInputAttributeDescription),
-                }
-            )
+            super().__init__(csr.Field(csr.action.RW, InputMode))
+
+    class InputDataReg(csr.Register, access="rw"):
+        def __init__(self):
+            super().__init__(csr.Field(csr.action.RW, InputData))
+
+    class RegSet:
+        mode: "InputAssembly.InputModeReg"
+        info: "InputAssembly.InputDataReg"
 
     def __init__(self):
         super().__init__()
         regs = csr.Builder(addr_width=4, data_width=8)
-        self.vertex_input_attributes = regs.add(
-            "vertex_input_attributes",
-            csr.Register(csr.Field(csr.action.RW, VertexInputAttributes())),
-        )
-        self.csr_bridge = csr.Br2idge(regs.as_memory_map())
-        self.csr_bus.memory_map = self.csr_bridge.memory_map
+
+        def make_reg_set():
+            v = self.RegSet()
+            v.mode = regs.add("mode", self.InputModeReg())
+            v.data = regs.add("data", self.InputDataReg())
+            return v
+
+        with regs.Cluster("position"):
+            self.position = make_reg_set()
+
+        with regs.Cluster("normal"):
+            self.normal = make_reg_set()
+
+        self.tex = []
+        with regs.Cluster("texcoords"):
+            for i in range(num_textures):
+                with regs.Index(i):
+                    self.tex.append(make_reg_set())
+
+        with regs.Cluster("color"):
+            self.color = make_reg_set()
+
+        self.csr_bridge = csr.Bridge(regs.as_memory_map())
+        self.csr_bus = self.csr_bridge.bus
 
     def elaborate(self, platform) -> Module:
         m = Module()
@@ -389,45 +403,42 @@ class InputAssembly(wiring.Component):
 
         # fetch vertex at given index based on vertex input attributes
 
-        idx = Signal.like(self.index_stream.payload)
-        vtx = Signal.like(self.vertex_stream.payload)
+        idx = Signal.like(self.is_index.payload)
+        vtx = Signal.like(self.os_vertex.payload)
 
-        output_next_free = ~self.vertex_stream.valid | self.vertex_stream.ready
+        addr = Signal.like(desc.info.f.data.per_vertex.address)
 
-        with m.If(self.vertex_stream.ready):
-            m.d.sync += self.vertex_stream.valid.eq(0)
+        output_next_free = ~self.os_vertex.valid | self.os_vertex.ready
+
+        with m.If(self.os_vertex.ready):
+            m.d.sync += self.os_vertex.valid.eq(0)
 
         class AttrInfo:
-            name: str
-            desc: VertexInputAttributeDescription
+            desc: "InputAssembly.RegSet"
             data_v: Signal
 
             @property
-            def components(self):
-                return self.data_v.shape().num_components.data
+            def components(self) -> int:
+                return self.data_v.shape().num_components
 
         attr_info = [
             AttrInfo(
-                name="position",
-                desc=self.vertex_input_attributes.f.position.data,
+                desc=self.position,
                 data_v=vtx.position,
             ),
             AttrInfo(
-                name="normal",
-                desc=self.vertex_input_attributes.f.normal.data,
+                desc=self.normal,
                 data_v=vtx.normal,
             ),
             *[
                 AttrInfo(
-                    name=f"texcoord_{i}",
-                    desc=self.vertex_input_attributes.f.texcoords[i].data,
+                    desc=self.tex[i],
                     data_v=vtx.texcoords[i],
                 )
                 for i in range(num_textures)
             ],
             AttrInfo(
-                name="color",
-                desc=self.vertex_input_attributes.f.color.data,
+                desc=self.color,
                 data_v=vtx.color,
             ),
         ]
@@ -435,37 +446,38 @@ class InputAssembly(wiring.Component):
         with m.FSM():
             with m.State("IDLE"):
                 m.d.comb += [
-                    self.ready.eq(~self.vertex_stream.valid & ~self.index_stream.valid),
-                    self.index_stream.ready.eq(1),
+                    self.ready.eq(~self.os_vertex.valid & ~self.is_index.valid),
+                    self.is_index.ready.eq(1),
                 ]
 
-                with m.If(self.index_stream.valid):
-                    m.d.sync += idx.eq(self.index_stream.payload)
+                with m.If(self.is_index.valid):
+                    m.d.sync += idx.eq(self.is_index.payload)
                     m.next = "FETCH_ATTR_0_START"
 
             for attr_no, attr in enumerate(attr_info):
                 base_name = f"FETCH_ATTR_{attr_no}"
                 with m.State(f"{base_name}_START"):
                     desc = attr["desc"]
-                    with m.If(
-                        desc.input_mode
-                        == VertexInputAttributeDescription.InputMode.CONSTANT
-                    ):
-                        # constant value
-                        m.d.sync += [
-                            attr.data_v[i].eq(desc.constant_value[i])
-                            for i in range(attr.components)
-                        ]
-                        m.next = f"{base_name}_DONE"
-                    with m.Else():
-                        # per-vertex attribute
-                        addr = Signal.like(desc.per_vertex.address)
-                        stride = Signal.like(desc.per_vertex.stride)
+                    with m.Switch(desc.mode.f.data):
+                        with m.Case(InputMode.CONSTANT):
+                            # constant value
+                            m.d.sync += [
+                                attr.data_v[i].eq_reinterpret(
+                                    desc.info.f.data.constant_value[i]
+                                )
+                                for i in range(attr.components)
+                            ]
+                            m.next = f"{base_name}_DONE"
+                        with m.Case(InputMode.PER_VERTEX):
+                            # per-vertex attribute
+                            base_addr = desc.info.f.data.per_vertex.address
+                            stride = desc.info.f.data.per_vertex.stride
+                            m.d.sync += addr.eq(base_addr + idx * stride)
+                            m.next = f"{base_name}_MEM_READ_COMPONENT_0"
+                        with m.Default():
+                            m.d.sync += Assert(0, "Unknown input mode")
 
-                        m.d.sync += addr.eq(desc.per_vertex.address + idx * stride)
-                        m.next = f"{base_name}_MEM_READ_COMPONENT_0"
-
-                for i in range(attr.components):
+                for i in range(len(desc.components)):
                     with m.State(f"{base_name}_MEM_READ_COMPONENT_{i}"):
                         # initiate memory read
                         m.d.sync += [
@@ -480,9 +492,7 @@ class InputAssembly(wiring.Component):
                     with m.State(f"{base_name}_MEM_WAIT_{i}"):
                         with m.If(self.bus.ack):
                             # parse and store
-                            m.d.sync += attr.data_v[i].eq(
-                                attr.data_v.shape().change_radix(self.bus.dat_r)
-                            )
+                            m.d.sync += attr.data_v[i].eq_reinterpret(self.bus.dat_r)
 
                             # deassert memory access
                             m.d.sync += [
@@ -505,8 +515,8 @@ class InputAssembly(wiring.Component):
                             # last attribute -> output vertex
                             with m.If(output_next_free):
                                 m.d.sync += [
-                                    self.vertex_stream.payload.eq(vtx),
-                                    self.vertex_stream.valid.eq(1),
+                                    self.os_vertex.payload.eq(vtx),
+                                    self.os_vertex.valid.eq(1),
                                 ]
                                 m.next = "IDLE"
                         else:
