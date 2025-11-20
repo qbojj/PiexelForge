@@ -1,9 +1,10 @@
 from amaranth import *
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
+from amaranth.utils import exact_log2
 from amaranth_soc import csr
+from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
 
-from ..utils.bus import internal_gpu_bus
 from ..utils.layouts import VertexLayout, num_textures
 from ..utils.types import IndexKind, InputTopology, address_shape, index_shape
 from .layouts import InputData, InputMode
@@ -25,21 +26,34 @@ class IndexGenerator(wiring.Component):
 
     os_index: Out(stream.Signature(index_shape))
 
-    bus: Out(internal_gpu_bus)
+    bus: Out(wishbone_Signature(addr_width=32, data_width=32, granularity=8))
 
     ready: Out(1)
 
+    class StartReg(csr.Register, access="w"):
+        def __init__(self):
+            super().__init__(csr.Field(csr.action.W, unsigned(1)))
+
+    class AddressReg(csr.Register, access="rw"):
+        def __init__(self):
+            super().__init__(csr.Field(csr.action.RW, address_shape))
+
+    class CountReg(csr.Register, access="rw"):
+        def __init__(self):
+            super().__init__(csr.Field(csr.action.RW, unsigned(32)))
+
+    class KindReg(csr.Register, access="rw"):
+        def __init__(self):
+            super().__init__(csr.Field(csr.action.RW, IndexKind))
+
     def __init__(self):
         super().__init__()
-        regs = csr.Builder(addr_width=4, data_width=8)
-        self.start = regs.add(
-            "start", csr.Register(csr.Field(csr.action.W, unsigned(1)))
-        )
+        regs = csr.Builder(addr_width=8, data_width=8)
+        self.start = regs.add("start", self.StartReg(), offset=0x00)
 
-        self.address = regs.add("address", csr.Field(csr.action.RW, address_shape))
-        self.count = regs.add("count", csr.Field(csr.action.RW, unsigned(32)))
-        self.kind = regs.add("kind", csr.Field(csr.action.RW, IndexKind))
-
+        self.address = regs.add("address", self.AddressReg(), offset=0x04)
+        self.count = regs.add("count", self.CountReg(), offset=0x08)
+        self.kind = regs.add("kind", self.KindReg(), offset=0x10)
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
         self.csr_bus = self.csr_bridge.bus
 
@@ -52,38 +66,44 @@ class IndexGenerator(wiring.Component):
         kind = self.kind.f.data
         count = self.count.f.data
 
-        index_increment = kind.matches(
-            {
-                IndexKind.U8: 1,
-                IndexKind.U16: 2,
-                IndexKind.U32: 4,
-            }
-        )
-        index_shift = kind.matches(
-            {
-                IndexKind.U8: 0,
-                IndexKind.U16: 1,
-                IndexKind.U32: 2,
-            }
-        )
+        index_increment = Signal(3)
+        index_shift = Signal(2)
+        with m.Switch(kind):
+            with m.Case(IndexKind.U8):
+                m.d.comb += [
+                    index_increment.eq(1),
+                    index_shift.eq(0),
+                ]
+            with m.Case(IndexKind.U16):
+                m.d.comb += [
+                    index_increment.eq(2),
+                    index_shift.eq(1),
+                ]
+            with m.Case(IndexKind.U32):
+                m.d.comb += [
+                    index_increment.eq(4),
+                    index_shift.eq(2),
+                ]
+            with m.Default():
+                m.d.comb += [
+                    index_increment.eq(0),
+                    index_shift.eq(0),
+                ]
 
-        data_read = Signal.like(self.master.dat_r)
+        data_read = Signal.like(self.bus.dat_r)
 
-        sel_width = len(self.master.sel)
+        sel_width = len(self.bus.sel)
 
-        assert sel_width == 4  # 32-bit memory bus with byte granularity
-        offset = address[0:2]
-        extended_data = Cat(kind, offset).matches(
-            {
-                Cat(IndexKind.U8, 0): data_read[0:8],
-                Cat(IndexKind.U8, 1): data_read[8:16],
-                Cat(IndexKind.U8, 2): data_read[16:24],
-                Cat(IndexKind.U8, 3): data_read[24:32],
-                Cat(IndexKind.U16, 0): data_read[0:16],
-                Cat(IndexKind.U16, 2): data_read[16:32],
-                Cat(IndexKind.U32, 0): data_read[0:32],
-            }
-        )
+        offset = address[0 : exact_log2(self.bus.data_width // self.bus.granularity)]
+        extended_data = Signal(index_shape)
+
+        with m.Switch(kind):
+            with m.Case(IndexKind.U8):
+                m.d.comb += extended_data.eq(data_read.word_select(offset[0:], 8))
+            with m.Case(IndexKind.U16):
+                m.d.comb += extended_data.eq(data_read.word_select(offset[1:], 16))
+            with m.Case(IndexKind.U32):
+                m.d.comb += extended_data.eq(data_read.word_select(offset[2:], 32))
 
         cur_idx = Signal.like(count)
 
@@ -92,11 +112,20 @@ class IndexGenerator(wiring.Component):
 
         with m.FSM():
             with m.State("IDLE"):
-                m.d.comb += self.ready.eq(1)
+                m.d.comb += self.ready.eq(~self.os_index.valid)
                 with m.If(self.start.f.w_data & self.start.f.w_stb):
                     m.d.sync += [
                         cur_idx.eq(0),
                         address.eq(self.address.f.data),
+                        Print(
+                            Format(
+                                "Starting index generator with: "
+                                "address={:#010x}, count={}, kind={}",
+                                self.address.f.data,
+                                count,
+                                kind,
+                            )
+                        ),
                     ]
                     with m.If(count == 0):
                         m.next = "IDLE"
@@ -119,7 +148,7 @@ class IndexGenerator(wiring.Component):
                 # initiate memory read
 
                 bytes_remaining = (count - cur_idx) << index_shift
-                max_mask = Signal.like(self.master.sel)
+                max_mask = Signal.like(self.bus.sel)
                 with m.Switch(bytes_remaining):
                     for i in range(sel_width):
                         with m.Case(i):
@@ -128,21 +157,23 @@ class IndexGenerator(wiring.Component):
                         m.d.comb += max_mask.eq(~0)
 
                 m.d.sync += [
-                    self.master.cyc.eq(1),
-                    self.master.adr.eq(address),
-                    self.master.we.eq(0),
-                    self.master.stb.eq(1),
-                    self.master.sel.eq(max_mask << offset),
+                    self.bus.cyc.eq(1),
+                    self.bus.adr.eq(
+                        address // (self.bus.data_width // self.bus.granularity)
+                    ),
+                    self.bus.we.eq(0),
+                    self.bus.stb.eq(1),
+                    self.bus.sel.eq(max_mask >> offset),
                 ]
                 m.next = "MEM_READ_WAIT"
             with m.State("MEM_READ_WAIT"):
                 # wait for ack and our index to be empty
-                with m.If(self.master.ack):
+                with m.If(self.bus.ack):
                     m.d.sync += [
                         # deassert memory access
-                        self.master.cyc.eq(0),
-                        self.master.stb.eq(0),
-                        data_read.eq(extended_data),
+                        self.bus.cyc.eq(0),
+                        self.bus.stb.eq(0),
+                        data_read.eq(self.bus.dat_r),
                     ]
                     m.next = "INDEX_SEND"
             with m.State("INDEX_SEND"):
@@ -185,16 +216,20 @@ class InputTopologyProcessor(wiring.Component):
         regs = csr.Builder(addr_width=4, data_width=8)
 
         self.input_topology = regs.add(
-            "input_topology", csr.Field(csr.action.RW, InputTopology)
+            "input_topology", csr.Field(csr.action.RW, InputTopology), access="rw"
         )
         self.primitive_restart_enable = regs.add(
-            "primitive_restart_enable", csr.Field(csr.action.RW, unsigned(1))
+            "primitive_restart_enable",
+            csr.Field(csr.action.RW, unsigned(1)),
+            access="rw",
         )
         self.primitive_restart_index = regs.add(
-            "primitive_restart_index", csr.Field(csr.action.RW, unsigned(32))
+            "primitive_restart_index",
+            csr.Field(csr.action.RW, unsigned(32)),
+            access="rw",
         )
         self.base_vertex = regs.add(
-            "base_vertex", csr.Field(csr.action.RW, unsigned(32))
+            "base_vertex", csr.Field(csr.action.RW, unsigned(32)), access="rw"
         )
 
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
@@ -352,7 +387,7 @@ class InputAssembly(wiring.Component):
     is_index: In(stream.Signature(index_shape))
     os_vertex: Out(stream.Signature(VertexLayout))
 
-    bus: Out(internal_gpu_bus)
+    bus: Out(wishbone_Signature(addr_width=32, data_width=32))
 
     ready: Out(1)
 
@@ -370,7 +405,7 @@ class InputAssembly(wiring.Component):
 
     def __init__(self):
         super().__init__()
-        regs = csr.Builder(addr_width=4, data_width=8)
+        regs = csr.Builder(addr_width=4, data_width=32)
 
         def make_reg_set():
             v = self.RegSet()
