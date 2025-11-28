@@ -152,6 +152,12 @@ class InputTopology(enum.Enum, shape=4):
     PATCH_LIST = 10
 
 
+class PrimitiveType(enum.Enum, shape=2):
+    POINTS = 0
+    LINES = 1
+    TRIANGLES = 2
+
+
 class ScalingType(enum.Enum, shape=unsigned(3)):
     """Scaling format type
 

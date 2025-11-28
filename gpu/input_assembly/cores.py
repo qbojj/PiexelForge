@@ -400,6 +400,7 @@ class InputAssembly(wiring.Component):
     - vertex_input_attributes: VertexInputAttributes - information about vertex attributes
 
     TODO: support other formats than Fixed 16.16
+    TODO: add memory burst support
     """
 
     is_index: In(stream.Signature(index_shape))

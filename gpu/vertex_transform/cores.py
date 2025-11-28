@@ -64,13 +64,13 @@ class VertexTransform(wiring.Component):
 
         with regs.Cluster("textures"):
             for i in range(num_textures):
-                with regs.Index(i):
+                with regs.Cluster(str(i)):  # TODO: Change to regs.Index(i):
                     self.texture_transforms.append(
                         regs.add("texture_transform", self.MatrixReg(16))
                     )
 
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.bus = self.csr_bridge.bus
+        self.csr_bus = self.csr_bridge.bus
 
     def elaborate(self, platform) -> Module:
         m = Module()

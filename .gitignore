@@ -5,3 +5,9 @@ test.gtkw
 .vscode
 .qsys_edit
 .pytest_cache
+.venv
+.mypy_cache
+.ruff_cache
+
+*.gtkw
+*.vcd

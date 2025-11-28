@@ -22,3 +22,6 @@ ignore = ["F403", "F405"]
 pythonpath = [
   "."
 ]
+addopts = [
+  "-n", "logical"
+]

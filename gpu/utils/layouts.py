@@ -24,17 +24,24 @@ class VertexLayout(data.Struct):
 
 class ShadingVertexLayout(data.Struct):
     position_view: Vector4
-    position_proj: Vector4  # In homogeneous coordinates after w-divide
+    position_proj: Vector4
     normal_view: Vector3
     texcoords: texture_coords  # After transforms
     color: Vector4
 
 
 class PrimitiveAssemblyLayout(data.Struct):
-    position_view: Vector4
+    position_proj: Vector4
     texcoords: texture_coords
     color: Vector4
     color_back: Vector4
+
+
+class RasterizerLayout(data.Struct):
+    position_ndc: Vector4  # In normalized device coordinates
+    texcoords: texture_coords
+    color: Vector4
+    front_facing: unsigned(1)
 
 
 class FragmentLayout(data.Struct):

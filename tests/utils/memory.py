@@ -2,16 +2,17 @@ from amaranth_soc.memory import MemoryMap, ResourceInfo
 from amaranth_soc.wishbone.bus import Interface
 
 
-def get_memory_resource(mmap: MemoryMap, name: str) -> ResourceInfo:
-    subvalues = name.split(".")
-    subvalues = [MemoryMap.Name((*sv.split(","),)) for sv in subvalues]
+def get_memory_resource(mmap: MemoryMap, path) -> ResourceInfo:
+    path = tuple(MemoryMap.Name(p) for p in path)
 
-    for res in mmap.all_resources():
-        if len(res.path) == len(subvalues) and all(
-            (res.path[i] == subvalues[i]) for i in range(len(res.path))
-        ):
-            return res
-    raise KeyError(f"Resource {name} not found in memory map")
+    print(f"Looking for resource {path} in memory map...")
+    print(f"All resources: {[res.path for res in mmap.all_resources()]}")
+
+    found = (res for res in mmap.all_resources() if res.path == path)
+    if res := next(found, None):
+        return res
+
+    raise KeyError(f"Resource {path} not found in memory map")
 
 
 class DebugAccess(Interface):
