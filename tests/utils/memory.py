@@ -5,9 +5,6 @@ from amaranth_soc.wishbone.bus import Interface
 def get_memory_resource(mmap: MemoryMap, path) -> ResourceInfo:
     path = tuple(MemoryMap.Name(p) for p in path)
 
-    print(f"Looking for resource {path} in memory map...")
-    print(f"All resources: {[res.path for res in mmap.all_resources()]}")
-
     found = (res for res in mmap.all_resources() if res.path == path)
     if res := next(found, None):
         return res

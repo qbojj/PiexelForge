@@ -2,7 +2,7 @@ from amaranth import *
 from amaranth.lib import wiring
 from amaranth.lib.wiring import In, Out
 
-from .types import FixedPointLayout
+from . import fixed
 
 
 class VectorizedOperation(wiring.Component):
@@ -138,9 +138,10 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
     Fast inverse square root using Newton-Raphson method for FixedPoint numbers.
     Works in domain [1.0, 2).
     The value in should be 1.{pattern}, where {pattern} is the fractional part.
+    Result will be (0.7, 1.0]
     """
 
-    def __init__(self, type: FixedPointLayout, steps: int = 2):
+    def __init__(self, type: fixed.Shape, steps: int = 2):
         super().__init__(
             {
                 "value": In(type),
@@ -151,6 +152,8 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
         )
         self.steps = steps
         self.type = type
+        assert not type.signed
+        assert type.i_bits > 0
 
     def elaborate(self, platform) -> Module:
         m = Module()
@@ -176,9 +179,8 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
                 m.d.comb += [self.ready.eq(1), self.result.eq(x)]
                 with m.If(self.start):
                     m.d.sync += [
-                        # Assert(self.value.int.as_unsigned() > 0),
-                        half_v.data.eq(self.value.data.as_unsigned() >> 1),
-                        x.eq(self.type.from_float(0.88)),
+                        half_v.eq(self.value >> 1),
+                        x.eq(fixed.Const(0.88)),  # Initial guess
                     ]
                     m.next = "ITERATE_0_STEP_0"
             for i in range(self.steps):
@@ -188,7 +190,7 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
                         mul_b.eq(x),
                     ]
                     m.d.sync += [
-                        three_halfs_x.eq(x + self.type(x.data.as_unsigned() >> 1)),
+                        three_halfs_x.eq(x + (x >> 1)),
                         ax.eq(mul_result),
                     ]
                     m.next = f"ITERATE_{i}_STEP_1"
@@ -225,7 +227,7 @@ class FixedPointInvSqrt(wiring.Component):
     Works for any positive FixedPoint number.
     """
 
-    def __init__(self, type: FixedPointLayout, steps: int = 2):
+    def __init__(self, type: fixed.Shape, steps: int = 2):
         super().__init__(
             {
                 "value": In(type),
@@ -240,8 +242,8 @@ class FixedPointInvSqrt(wiring.Component):
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        data_bits = len(self.value.data)
-        small_type = FixedPointLayout(data_bits - 2, 2)
+        data_bits = self.type.i_bits + self.type.f_bits
+        small_type = fixed.UQ(1, data_bits - 1)
         m.submodules.inv_sqrt_small = inv_sqrt_small = FixedPointInvSqrtSmallDomain(
             small_type, self.steps
         )
@@ -257,7 +259,7 @@ class FixedPointInvSqrt(wiring.Component):
         m.d.comb += [
             inv_sqrt_small.value.eq(inv_sqrt_data_in),
             inv_sqrt_data_out.eq(inv_sqrt_small.result),
-            shift_value.eq(lz - (self.type.hi_bits - small_type.hi_bits) - 1),
+            shift_value.eq(lz - (self.type.i_bits - small_type.i_bits)),  # - 1),
         ]
 
         def do_shift_by(value: Value, shift: Value) -> Value:
@@ -272,10 +274,10 @@ class FixedPointInvSqrt(wiring.Component):
             with m.State("IDLE"):
                 m.d.comb += [self.ready.eq(1), self.result.eq(norm_value)]
                 with m.If(self.start):
-                    with m.If(self.value.data <= 0):
+                    with m.If(self.value <= 0):
                         m.d.sync += [
                             # Return 0 for non-positive inputs
-                            norm_value.eq(self.type.from_float(0.0)),
+                            norm_value.eq(fixed.Const(0.0)),
                         ]
                         m.next = "IDLE"
                     with m.Else():
@@ -283,12 +285,12 @@ class FixedPointInvSqrt(wiring.Component):
                         m.next = "CLZ"
             with m.State("CLZ"):
                 m.d.sync += [
-                    lz.eq(count_leading_zeros(v.data.as_unsigned())),
+                    lz.eq(count_leading_zeros(v.as_value())),
                 ]
                 m.next = "NORMALIZE"
             with m.State("NORMALIZE"):
                 m.d.comb += [
-                    inv_sqrt_data_in.eq(do_shift_by(v.data, lz - 1)),
+                    inv_sqrt_data_in.eq(v.as_value() << lz),
                     inv_sqrt_small.start.eq(1),
                 ]
                 m.next = "INV_SQRT_SMALL"
@@ -303,14 +305,14 @@ class FixedPointInvSqrt(wiring.Component):
                         m.next = "SHIFT_BACK"
             with m.State("POST_MULT"):
                 m.d.sync += [
-                    pre_shift_value.eq(pre_shift_value * small_type.from_float(2**0.5)),
+                    pre_shift_value.eq(pre_shift_value * fixed.Const(2**0.5)),
                 ]
                 m.next = "SHIFT_BACK"
             with m.State("SHIFT_BACK"):
-                shift_offset = self.type.lo_bits - small_type.lo_bits
+                shift_offset = self.type.f_bits - small_type.f_bits
                 m.d.sync += norm_value.eq(
                     do_shift_by(
-                        pre_shift_value.data.as_unsigned(),
+                        pre_shift_value.as_value(),
                         shift_value[1:].as_signed() + shift_offset,
                     )
                 )
@@ -367,7 +369,7 @@ class FixedPointVecNormalize(wiring.Component):
         inv_len_v = Signal.like(v[0])
 
         m.d.comb += [
-            dot_v.eq(sum(mult.result, start=elem_type.from_float(0.0))),
+            dot_v.eq(sum(mult.result, start=fixed.Const(0.0))),
             inv_len_v.eq(inv_sqrt.result),
         ]
 

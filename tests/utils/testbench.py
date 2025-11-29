@@ -27,15 +27,17 @@ class SimpleTestbench:
         self.data_width = data_width
         self.addr_width = addr_width
         self.granularity = granularity
+        self.mem_size = mem_size
+        self.mem_addr = mem_addr
 
-        m.submodules.arbiter = self.arbiter = arbiter = Arbiter(
+        m.submodules.arbiter = self.arbiter = Arbiter(
             addr_width=addr_width,
             data_width=data_width,
             granularity=granularity,
             features=features,
         )
 
-        m.submodules.decoder = self.decoder = decoder = Decoder(
+        m.submodules.decoder = self.decoder = Decoder(
             addr_width=addr_width,
             data_width=data_width,
             granularity=granularity,
@@ -50,14 +52,11 @@ class SimpleTestbench:
             addr_width=20, data_width=granularity, alignment=3
         )
 
-        m.submodules.mem = self.mem = mem = WishboneSRAM(
+        m.submodules.mem = self.mem = WishboneSRAM(
             size=mem_size, data_width=data_width, granularity=granularity, writable=True
         )
 
-        arbiter.add(dbg_access)
-
-        decoder.add(mem.wb_bus, addr=mem_addr)
-
+        self.arbiter.add(dbg_access)
         self.csrs = []
 
     def set_csrs(
@@ -78,11 +77,10 @@ class SimpleTestbench:
             self.csr_decoder.bus, data_width=self.data_width
         )
         self.decoder.add(csr_bridge.wb_bus)
+        self.decoder.add(self.mem.wb_bus, addr=self.mem_addr)
 
         wiring.connect(self.m, self.arbiter.bus, self.decoder.bus)
         self.arbiter.bus.memory_map = self.decoder.bus.memory_map
-
-        self.csr_bridge.wb_bus.memory_map = self.csr_decoder.bus.memory_map
 
     async def initialize_csrs(self, ctx):
         mmap: MemoryMap = self.decoder.bus.memory_map

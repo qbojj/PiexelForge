@@ -7,6 +7,8 @@ from amaranth.utils import exact_log2
 from amaranth_soc import csr
 from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
 
+from gpu.utils import fixed
+
 from ..utils.layouts import VertexLayout, num_textures
 from ..utils.types import (
     FixedPoint_mem,
@@ -423,10 +425,10 @@ class InputAssembly(wiring.Component):
                     init=InputData.from_bits(
                         Vector4_mem.const(
                             [
-                                FixedPoint_mem.from_float_const(0.0),
-                                FixedPoint_mem.from_float_const(0.0),
-                                FixedPoint_mem.from_float_const(0.0),
-                                FixedPoint_mem.from_float_const(1.0),
+                                fixed.Const(0.0, FixedPoint_mem),
+                                fixed.Const(0.0, FixedPoint_mem),
+                                fixed.Const(0.0, FixedPoint_mem),
+                                fixed.Const(1.0, FixedPoint_mem),
                             ]
                         ).as_bits()
                     ),
@@ -533,9 +535,7 @@ class InputAssembly(wiring.Component):
                         with m.Case(InputMode.CONSTANT):
                             # constant value
                             m.d.sync += [
-                                attr.data_v[i].eq_reinterpret(
-                                    desc.info.f.data.constant_value[i]
-                                )
+                                attr.data_v[i].eq(desc.info.f.data.constant_value[i])
                                 for i in range(attr.components)
                             ]
                             m.next = f"{base_name}_DONE"
@@ -563,7 +563,7 @@ class InputAssembly(wiring.Component):
                     with m.State(f"{base_name}_MEM_WAIT_{i}"):
                         with m.If(self.bus.ack):
                             # parse and store
-                            m.d.sync += attr.data_v[i].eq_reinterpret(
+                            m.d.sync += attr.data_v[i].eq(
                                 FixedPoint_mem(self.bus.dat_r)
                             )
 

@@ -4,30 +4,37 @@ from amaranth.sim import Simulator
 
 from gpu.input_assembly.cores import InputAssembly
 from gpu.input_assembly.layouts import InputData, InputMode
+from gpu.utils import fixed
 from gpu.utils.types import FixedPoint, FixedPoint_mem, Vector3, Vector4, Vector4_mem
 
 from ..utils.streams import stream_testbench
 from ..utils.testbench import SimpleTestbench
 
-vec0001_mem = [
-    FixedPoint_mem.from_float_const(0.0),
-    FixedPoint_mem.from_float_const(0.0),
-    FixedPoint_mem.from_float_const(0.0),
-    FixedPoint_mem.from_float_const(1.0),
-]
+vec0001_mem = Vector4_mem.const(
+    [
+        fixed.Const(0.0, FixedPoint_mem),
+        fixed.Const(0.0, FixedPoint_mem),
+        fixed.Const(0.0, FixedPoint_mem),
+        fixed.Const(1.0, FixedPoint_mem),
+    ]
+)
 
-vec0001 = [
-    FixedPoint.from_float_const(0.0),
-    FixedPoint.from_float_const(0.0),
-    FixedPoint.from_float_const(0.0),
-    FixedPoint.from_float_const(1.0),
-]
+vec0001 = Vector4.const(
+    [
+        fixed.Const(0.0, FixedPoint),
+        fixed.Const(0.0, FixedPoint),
+        fixed.Const(0.0, FixedPoint),
+        fixed.Const(1.0, FixedPoint),
+    ]
+)
 
-vec000 = [
-    FixedPoint.from_float_const(0.0),
-    FixedPoint.from_float_const(0.0),
-    FixedPoint.from_float_const(0.0),
-]
+vec000 = Vector3.const(
+    [
+        fixed.Const(0.0, FixedPoint),
+        fixed.Const(0.0, FixedPoint),
+        fixed.Const(0.0, FixedPoint),
+    ]
+)
 
 
 default_data = InputData.const({"constant_value": vec0001_mem})
@@ -99,37 +106,37 @@ def make_test_input_assembly(
 
 vec1234_mem = Vector4_mem.const(
     [
-        FixedPoint_mem.from_float_const(1.0),
-        FixedPoint_mem.from_float_const(2.0),
-        FixedPoint_mem.from_float_const(3.0),
-        FixedPoint_mem.from_float_const(4.0),
+        fixed.Const(1.0, FixedPoint_mem),
+        fixed.Const(2.0, FixedPoint_mem),
+        fixed.Const(3.0, FixedPoint_mem),
+        fixed.Const(4.0, FixedPoint_mem),
     ]
 )
 
 vec1234 = Vector4.const(
     [
-        FixedPoint.from_float_const(1.0),
-        FixedPoint.from_float_const(2.0),
-        FixedPoint.from_float_const(3.0),
-        FixedPoint.from_float_const(4.0),
+        fixed.Const(1.0, FixedPoint),
+        fixed.Const(2.0, FixedPoint),
+        fixed.Const(3.0, FixedPoint),
+        fixed.Const(4.0, FixedPoint),
     ]
 )
 
 vec5678_mem = Vector4_mem.const(
     [
-        FixedPoint_mem.from_float_const(5.0),
-        FixedPoint_mem.from_float_const(6.0),
-        FixedPoint_mem.from_float_const(7.0),
-        FixedPoint_mem.from_float_const(8.0),
+        fixed.Const(5.0, FixedPoint_mem),
+        fixed.Const(6.0, FixedPoint_mem),
+        fixed.Const(7.0, FixedPoint_mem),
+        fixed.Const(8.0, FixedPoint_mem),
     ]
 )
 
 vec5678 = Vector4.const(
     [
-        FixedPoint.from_float_const(5.0),
-        FixedPoint.from_float_const(6.0),
-        FixedPoint.from_float_const(7.0),
-        FixedPoint.from_float_const(8.0),
+        fixed.Const(5.0, FixedPoint),
+        fixed.Const(6.0, FixedPoint),
+        fixed.Const(7.0, FixedPoint),
+        fixed.Const(8.0, FixedPoint),
     ]
 )
 
