@@ -172,10 +172,6 @@ class FixedPointInv(wiring.Component):
         with m.If(self.o.ready):
             m.d.sync += self.o.valid.eq(0)
 
-        def shift_left_signed(val: Signal, shift: Signal) -> Signal:
-            result = Signal(val.shape())
-            return result
-
         with m.FSM():
             with m.State("IDLE"):
                 with m.If(self.i.valid):
@@ -283,8 +279,8 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
                 "o": Out(stream.Signature(type)),
             }
         )
-        self.steps = steps
-        self.type = type
+        self._steps = steps
+        self._type = type
         assert not type.signed
         assert type.i_bits > 0
 
@@ -295,20 +291,20 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
         # x_{n+1}=x_n(1.5−0.5∗value∗x_n*x_n)
         # x_{n+1}=(x_n + x_n/2) - half_v*x_n*x_n*x_n, where half_v = value/2
 
-        x = Signal(self.type)
+        x = Signal(self._type)
 
-        initial_guess = fixed.Const(0.88, self.type)
+        initial_guess = fixed.Const(0.88, self._type)
 
-        three_halfs_x = Signal(self.type)
-        ax = Signal(self.type)
-        x2 = Signal(self.type)
+        three_halfs_x = Signal(self._type)
+        ax = Signal(self._type)
+        x2 = Signal(self._type)
 
-        mul_a = Signal(self.type)
-        mul_b = Signal(self.type)
-        mul_result = Signal(self.type)
+        mul_a = Signal(self._type)
+        mul_b = Signal(self._type)
+        mul_result = Signal(self._type)
         m.d.comb += mul_result.eq(mul_a * mul_b)
 
-        iter = Signal(range(self.steps))
+        iter = Signal(range(self._steps))
 
         with m.If(self.o.ready):
             m.d.sync += self.o.valid.eq(0)
@@ -347,7 +343,7 @@ class FixedPointInvSqrtSmallDomain(wiring.Component):
                     x.eq(new_x),
                     iter.eq(iter + 1),
                 ]
-                with m.If(iter < self.steps - 1):
+                with m.If(iter < self._steps - 1):
                     m.next = "STEP_0"
                 with m.Else():
                     m.d.comb += self.i.ready.eq(1)
@@ -376,26 +372,26 @@ class FixedPointInvSqrt(wiring.Component):
                 "o": Out(stream.Signature(type)),
             }
         )
-        self.steps = steps
-        self.type = type
+        self._steps = steps
+        self._type = type
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        data_bits = self.type.i_bits + self.type.f_bits
+        data_bits = self._type.i_bits + self._type.f_bits
         small_type = fixed.UQ(1, data_bits - 1)
         m.submodules.inv_sqrt_small = inv_sqrt_small = FixedPointInvSqrtSmallDomain(
-            small_type, self.steps
+            small_type, self._steps
         )
-        m.submodules.clz = clz = CountLeadingZeros(self.type.as_shape())
+        m.submodules.clz = clz = CountLeadingZeros(self._type.as_shape())
 
-        norm_value = Signal(self.type)
+        norm_value = Signal(self._type)
         lz = clz.o.payload
         shift_value = Signal(range(-data_bits, data_bits + 1))
         pre_shift_value = Signal(small_type)
 
         m.d.comb += [
-            shift_value.eq(lz - (self.type.i_bits - small_type.i_bits)),
+            shift_value.eq(lz - (self._type.i_bits - small_type.i_bits)),
         ]
 
         # no pipelining for now
@@ -480,15 +476,15 @@ class SimpleOpModule(wiring.Component):
                 "o": Out(stream.Signature(type)),
             }
         )
-        self.op = op
-        self.type = type
+        self._op = op
+        self._type = type
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
         m.d.comb += [
             self.o.valid.eq(self.a.valid & self.b.valid),
-            self.o.payload.eq(self.op(self.a.p, self.b.p)),
+            self.o.payload.eq(self._op(self.a.p, self.b.p)),
             self.a.ready.eq(self.o.ready & self.o.valid),
             self.b.ready.eq(self.o.ready & self.o.valid),
         ]
@@ -497,29 +493,29 @@ class SimpleOpModule(wiring.Component):
 
 
 class FixedPointVecNormalize(wiring.Component):
-    def __init__(self, vector_type, inv_sqrt_steps=2):
+    def __init__(self, vector_type, steps=2):
         super().__init__(
             {
                 "i": In(stream.Signature(vector_type)),
                 "o": Out(stream.Signature(vector_type)),
             }
         )
-        self.vector_type = vector_type
-        self.inv_sqrt_steps = inv_sqrt_steps
+        self._type = vector_type
+        self._steps = steps
 
     def elaborate(self, platform):
         m = Module()
 
-        elem_type = self.vector_type.elem_shape
+        elem_type = self._type.elem_shape
         unsiged_elem_type = fixed.UQ(elem_type.i_bits, elem_type.f_bits)
 
         m.submodules.inv_sqrt = inv_sqrt = FixedPointInvSqrt(
-            unsiged_elem_type, steps=self.inv_sqrt_steps
+            unsiged_elem_type, steps=self._steps
         )
 
-        m.submodules.vec_to_stream_a = v2s_a = VectorToStream(self.vector_type)
-        m.submodules.vec_to_stream_b = v2s_b = VectorToStream(self.vector_type)
-        m.submodules.stream_to_vec = s2v = StreamToVector(self.vector_type)
+        m.submodules.vec_to_stream_a = v2s_a = VectorToStream(self._type)
+        m.submodules.vec_to_stream_b = v2s_b = VectorToStream(self._type)
+        m.submodules.stream_to_vec = s2v = StreamToVector(self._type)
         m.submodules.mult = mult = SimpleOpModule(lambda a, b: a * b, elem_type)
 
         wiring.connect(m, v2s_a.o, mult.a)

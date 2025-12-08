@@ -110,17 +110,15 @@ class Shape(hdl.ShapeCastable):
         if self.f_bits == 0:
             return Format("{:d}.", integer)
 
+        fract_part = (value.as_value() * len_pow // (1 << self.f_bits)) % len_pow
         if self.signed:
-            v1 = Mux((fract > 0) & (integer < 0), integer + 1, integer)
-            v2 = (value.as_value() * len_pow // (1 << self.f_bits)) % len_pow
-
-            v3 = Mux((integer < 0) & (fract > 0), len_pow - v2, v2)
-
-            return Format("{:-d}.{:0{}d}", v1, v3, decimal_length)
+            v1 = Mux((integer < 0) & (fract > 0), integer + 1, integer)
+            v2 = Mux((integer < 0) & (fract > 0), len_pow - fract_part, fract_part)
         else:
             v1 = integer
-            v2 = (value.as_value() * len_pow // (1 << self.f_bits)) % len_pow
-            return Format("{:d}.{:0{}d}", v1, v2, decimal_length)
+            v2 = fract_part
+
+        return Format("{:-d}.{:0{}d}", v1, v2, decimal_length)
 
 
 class SQ(Shape):

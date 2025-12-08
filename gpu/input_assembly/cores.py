@@ -7,7 +7,12 @@ from amaranth.utils import exact_log2
 from amaranth_soc import csr
 from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
 
-from ..utils.layouts import VertexLayout, num_textures, wb_bus_addr_width
+from ..utils.layouts import (
+    VertexLayout,
+    num_textures,
+    wb_bus_addr_width,
+    wb_bus_data_width,
+)
 from ..utils.types import (
     FixedPoint_mem,
     IndexKind,
@@ -34,7 +39,9 @@ class IndexGenerator(wiring.Component):
 
     os_index: Out(stream.Signature(index_shape))
 
-    bus: Out(wishbone_Signature(addr_width=wb_bus_addr_width, data_width=32))
+    bus: Out(
+        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
+    )
 
     ready: Out(1)
 
@@ -100,7 +107,7 @@ class IndexGenerator(wiring.Component):
 
         data_read = Signal.like(self.bus.dat_r)
 
-        offset = address[0 : exact_log2(self.bus.data_width // 8)]
+        offset = address[: exact_log2(self.bus.data_width // 8)]
         extended_data = Signal(index_shape)
 
         with m.Switch(kind):
@@ -405,7 +412,9 @@ class InputAssembly(wiring.Component):
     is_index: In(stream.Signature(index_shape))
     os_vertex: Out(stream.Signature(VertexLayout))
 
-    bus: Out(wishbone_Signature(addr_width=wb_bus_addr_width, data_width=32))
+    bus: Out(
+        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
+    )
 
     ready: Out(1)
 

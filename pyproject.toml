@@ -1,3 +1,27 @@
+[project]
+name = "pixel-forge"
+dynamic = ["version"]
+dependencies = [
+    "amaranth >= 0.5.0",
+    "amaranth-boards @ git+https://github.com/amaranth-lang/amaranth-boards.git@7e24efe2f6e95afddd0c1b56f1a9423c48caa472",
+    "amaranth-soc @ git+https://github.com/amaranth-lang/amaranth-soc.git@5c43cf58f15d9cd9c69ff83c97997708d386b2dc",
+    "transactron >= 0.4.0",
+]
+requires-python = ">=3.13"
+
+[project.urls]
+"Source Code" = "https://github.com/qbojj/PiexelForge.git"
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest >= 9.0.0",
+    "pytest-xdist == 3.5.0",
+    "hypothesis == 6.99.6",
+    # Other
+    "pre-commit >= 2.20.0"
+]
+
 [tool.black]
 line-length = 88
 target-version = ['py310']

@@ -1,4 +1,6 @@
 **/__pycache__/
+build/
+pixel_forge.egg-info/
 test.vcd
 test.gtkw
 

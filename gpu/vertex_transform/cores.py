@@ -246,7 +246,7 @@ class PerspectiveDivide(wiring.Component):
                     m.next = "DIVIDE"
             with m.State("DIVIDE"):
                 # calculate x*1/w, y*1/w, z*1/w, 1/w
-                with m.If(s2v.o.valid):
+                with m.If(s2v.o.valid & (self.o.ready | ~self.o.valid)):
                     m.d.comb += [
                         dup.o.ready.eq(1),
                         s2v.o.ready.eq(1),

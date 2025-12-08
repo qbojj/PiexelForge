@@ -11,20 +11,15 @@ from .streams import stream_testbench
 @pytest.mark.parametrize(
     "data",
     [
-        [[1.0, 0.0, 0.0]],
-        [[0.0, 1.0, 0.0]],
-        [[0.0, 0.0, 1.0]],
-        [[3.0, 4.0, 0.0]],
-        [[-3.0, -4.0, 0.0]],
-        [[-3.0, 4.0, 0.0]],
-        [[0.2, 0.0, 0.0]],
-        [[0.0, 1.0, 0.0], [2.0, 0.0, 0.0]],
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        [[3.0, 4.0, 0.0], [-3.0, -4.0, 0.0], [-3.0, 4.0, 0.0]],
+        [[0.2, 0.0, 0.0], [0.0, 1.0, 0.0], [2.0, 0.0, 0.0]],
     ]
     + [[[float(i), 0.0, 0.0]] for i in range(1, 10)],
 )
 def test_normalize(data: list[list[float]]):
     expected = [[v / sum(comp**2 for comp in vec) ** 0.5 for v in vec] for vec in data]
-    dut = FixedPointVecNormalize(Vector3)
+    dut = FixedPointVecNormalize(Vector3, steps=2)
 
     async def output_checker(ctx, results):
         results = [[v.as_float() for v in r] for r in results]
@@ -69,14 +64,14 @@ def test_normalize(data: list[list[float]]):
         [0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0],
         [-4.0, -2.0, -1.0, -0.5, -0.25],
         [0.1 * i for i in range(1, 11)],
-        [10.0, 0.1],
         [f for f in range(-10, 11) if f != 0.0],
+        [f * 0.1 for f in range(-10, 11) if f != 0.0],
     ],
 )
 def test_inverse(data: list[float]):
     expected = [1.0 / v for v in data]
 
-    dut = FixedPointInv(FixedPoint, steps=4)
+    dut = FixedPointInv(FixedPoint, steps=3)
 
     async def output_checker(ctx, results):
         results = [v.as_float() for v in results]
