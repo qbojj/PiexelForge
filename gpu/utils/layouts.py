@@ -37,7 +37,7 @@ class ShadingVertexLayout(data.Struct):
 
 
 class PrimitiveAssemblyLayout(data.Struct):
-    position_proj: Vector4
+    position_ndc: Vector4
     texcoords: texture_coords
     color: Vector4
     color_back: Vector4

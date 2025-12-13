@@ -71,9 +71,8 @@ class PrimitiveAssembly(wiring.Component):
 
                     m.d.sync += [
                         self.os_primitive.valid.eq(1),
-                        # Rasterizer expects NDC; pass through projected coords for now.
                         self.os_primitive.p.position_ndc.eq(
-                            self.is_vertex.p.position_proj
+                            self.is_vertex.p.position_ndc
                         ),
                         self.os_primitive.p.texcoords.eq(self.is_vertex.p.texcoords),
                         self.os_primitive.p.color.eq(self.is_vertex.p.color),
@@ -88,9 +87,7 @@ class PrimitiveAssembly(wiring.Component):
                 def send_vertex(m, ff, idx):
                     m.d.sync += [
                         self.os_primitive.valid.eq(1),
-                        self.os_primitive.p.position_ndc.eq(
-                            trinagle[idx].position_proj
-                        ),
+                        self.os_primitive.p.position_ndc.eq(trinagle[idx].position_ndc),
                         self.os_primitive.p.texcoords.eq(trinagle[idx].texcoords),
                         self.os_primitive.p.color.eq(
                             Mux(ff, trinagle[idx].color, trinagle[idx].color_back)
@@ -111,10 +108,10 @@ class PrimitiveAssembly(wiring.Component):
                                 m.d.sync += idx.eq(0)
                                 m.next = "SEND_PRIMITIVE"
                     with m.State("SEND_PRIMITIVE"):
-                        # Compute vectors
+                        # Compute vectors with widened intermediates to preserve sign
                         v0 = Array(Signal(FixedPoint) for _ in range(2))
                         v1 = Array(Signal(FixedPoint) for _ in range(2))
-                        a = Signal(FixedPoint)
+                        area = Signal(FixedPoint)
 
                         """
                         a = -1/2 * SUM_{i=0}^{n-1}{x_i*y_{i+1 mod n} - x_{i+1 mod n}*y_i}
@@ -127,9 +124,9 @@ class PrimitiveAssembly(wiring.Component):
                         a = -1/2 * ( (x1 - x0)*(y2 - y1) - (x2 - x1)*(y1 - y0) )
                         """
 
-                        vtx0 = trinagle[0].position_proj
-                        vtx1 = trinagle[1].position_proj
-                        vtx2 = trinagle[2].position_proj
+                        vtx0 = trinagle[0].position_ndc
+                        vtx1 = trinagle[1].position_ndc
+                        vtx2 = trinagle[2].position_ndc
 
                         m.d.comb += [
                             v0[0].eq(vtx1[0] - vtx0[0]),
@@ -137,37 +134,40 @@ class PrimitiveAssembly(wiring.Component):
                             v1[0].eq(vtx2[0] - vtx1[0]),
                             v1[1].eq(vtx2[1] - vtx1[1]),
                             # Twice the signed area (negative for CW when front face is CCW)
-                            a.eq(((v0[0] * v1[1]) - (v1[0] * v0[1])) >> 1),
+                            area.eq((v0[0] * v1[1]) - (v1[0] * v0[1])),
                         ]
 
                         ff = Signal()
                         with m.Switch(self.prim_winding.f.winding.data):
                             with m.Case(FrontFace.CCW):
-                                m.d.comb += ff.eq(a > 0)
+                                m.d.comb += ff.eq(area > 0)
                             with m.Case(FrontFace.CW):
-                                m.d.comb += ff.eq(a < 0)
+                                m.d.comb += ff.eq(area < 0)
 
-                        with m.If(
-                            ff
-                            & (
-                                (
-                                    self.prim_cull.f.cull.data.as_value()
-                                    & CullFace.FRONT.value
-                                )
-                                != 0
+                        m.d.sync += Print(Format("vtx0: {}", vtx0))
+                        m.d.sync += Print(Format("vtx1: {}", vtx1))
+                        m.d.sync += Print(Format("vtx2: {}", vtx2))
+
+                        m.d.sync += Print(Format("v0: {} {}", v0[0], v0[1]))
+                        m.d.sync += Print(Format("v1: {} {}", v1[0], v1[1]))
+
+                        m.d.sync += Print(
+                            Format(
+                                "Area: {}, Front Facing: {}, prim_wind: {}, cull: {}",
+                                area,
+                                ff,
+                                self.prim_winding.f.winding.data,
+                                self.prim_cull.f.cull.data,
                             )
-                        ):
+                        )
+
+                        cull_v = self.prim_cull.f.cull.data.as_value()
+
+                        with m.If(ff & ((cull_v & CullFace.FRONT.value) != 0)):
+                            m.d.sync += Print("Culling front face")
                             m.next = "WAIT_VERTEX"  # cull primitive
-                        with m.Elif(
-                            ~ff
-                            & (
-                                (
-                                    self.prim_cull.f.cull.data.as_value()
-                                    & CullFace.BACK.value
-                                )
-                                != 0
-                            )
-                        ):
+                        with m.Elif(~ff & ((cull_v & CullFace.BACK.value) != 0)):
+                            m.d.sync += Print("Culling back face")
                             m.next = "WAIT_VERTEX"  # cull primitive
                         with m.Elif(self.os_primitive.ready | ~self.os_primitive.valid):
                             # Register front_facing for use in subsequent states

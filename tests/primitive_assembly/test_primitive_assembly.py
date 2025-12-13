@@ -11,7 +11,7 @@ from ..utils.testbench import SimpleTestbench
 
 def make_pa_vertex(pos, color, color_back=None):
     return {
-        "position_proj": pos,
+        "position_ndc": pos,
         "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
         "color": color,
         "color_back": color_back if color_back is not None else color,
@@ -30,8 +30,10 @@ def assert_rasterizer_vertex(payload, pos, color, front):
     "pos,color",
     [
         ([0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]),
-        ([0.5, -0.5, 0.5, 1.0], [0.0, 1.0, 0.0, 1.0]),
-        ([-1.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]),
+        (
+            [0.5, -0.5, 0.5, 1.0, -1.0, 1.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+        ),
     ],
 )
 def test_points_passthrough_hypothesis(pos, color):
@@ -52,11 +54,18 @@ def test_points_passthrough_hypothesis(pos, color):
         "dut",
     )
 
-    vertices = [make_pa_vertex(pos, color)]
+    vertices = [
+        make_pa_vertex(pos[i : i + 4], color[i : i + 4]) for i in range(0, len(pos), 4)
+    ]
+
+    print("Testing points passthrough with vertices:", vertices)
 
     async def checker(ctx, results):
-        assert len(results) == 1
-        assert_rasterizer_vertex(results[0], pos, color, 1)
+        assert len(results) == len(vertices)
+        for i in range(len(vertices)):
+            assert_rasterizer_vertex(
+                results[i], pos[4 * i : 4 * i + 4], color[4 * i : 4 * i + 4], 1
+            )
 
     sim = Simulator(t)
     sim.add_clock(1e-6)
@@ -95,10 +104,10 @@ def test_lines_passthrough():
     async def checker(ctx, results):
         assert len(results) == 2
         assert_rasterizer_vertex(
-            results[0], line[0]["position_proj"], line[0]["color"], 1
+            results[0], line[0]["position_ndc"], line[0]["color"], 1
         )
         assert_rasterizer_vertex(
-            results[1], line[1]["position_proj"], line[1]["color"], 1
+            results[1], line[1]["position_ndc"], line[1]["color"], 1
         )
 
     sim = Simulator(t)
@@ -118,9 +127,11 @@ def test_lines_passthrough():
 
 @pytest.mark.parametrize("front_face", [FrontFace.CCW, FrontFace.CW])
 @pytest.mark.parametrize(
-    "tri, winding_order, expected_ff, expected_colors",
+    "cull_face", [CullFace.NONE, CullFace.BACK, CullFace.FRONT, CullFace.FRONT_AND_BACK]
+)
+@pytest.mark.parametrize(
+    "tri, winding_order",
     [
-        # CCW positions -> CCW winding; expected_ff depends on FrontFace setting
         (
             [
                 make_pa_vertex(
@@ -133,14 +144,8 @@ def test_lines_passthrough():
                     [0.0, 1.0, 0.0, 1.0], [1.0, 0.0, 0.5, 1.0], [0.0, 0.5, 1.0, 1.0]
                 ),
             ],
-            "CCW",
-            {FrontFace.CCW: 1, FrontFace.CW: 0},
-            {
-                FrontFace.CCW: ["color", "color", "color"],
-                FrontFace.CW: ["color_back", "color_back", "color_back"],
-            },
+            FrontFace.CCW,
         ),
-        # CW positions -> CW winding; expected_ff depends on FrontFace setting
         (
             [
                 make_pa_vertex(
@@ -153,18 +158,11 @@ def test_lines_passthrough():
                     [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.5, 1.0], [0.0, 0.5, 1.0, 1.0]
                 ),
             ],
-            "CW",
-            {FrontFace.CCW: 0, FrontFace.CW: 1},
-            {
-                FrontFace.CCW: ["color_back", "color_back", "color_back"],
-                FrontFace.CW: ["color", "color", "color"],
-            },
+            FrontFace.CW,
         ),
     ],
 )
-def test_triangles_winding_and_front_face(
-    tri, winding_order, expected_ff, expected_colors, front_face
-):
+def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_face):
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
@@ -172,21 +170,32 @@ def test_triangles_winding_and_front_face(
         dut.csr_bus,
         [
             ((("prim_type",),), PrimitiveType.TRIANGLES),
-            ((("prim_cull",),), CullFace.NONE),
+            ((("prim_cull",),), cull_face),
             ((("prim_winding",),), front_face),
         ],
         "dut",
     )
 
+    ff_expected = winding_order == front_face
+    cols = ["color" if ff_expected else "color_back"] * 3
+
+    if ff_expected:
+        should_be_culled = bool(cull_face & CullFace.FRONT)
+    else:
+        should_be_culled = bool(cull_face & CullFace.BACK)
+
     async def checker(ctx, results):
-        assert len(results) == 3
-        ff_val = expected_ff[front_face]
-        cols = expected_colors[front_face]
+        if should_be_culled:
+            assert results == []
+            return
+
+        assert len(results) == len(tri)
+
         for i in range(3):
             use_key = cols[i]
             exp_color = tri[i][use_key]
             assert_rasterizer_vertex(
-                results[i], tri[i]["position_proj"], exp_color, ff_val
+                results[i], tri[i]["position_ndc"], exp_color, ff_expected
             )
 
     sim = Simulator(t)
@@ -230,15 +239,9 @@ def test_triangles_winding_and_front_face(
 
     async def checker(ctx, results):
         assert len(results) == 3
-        assert_rasterizer_vertex(
-            results[0], tri[0]["position_proj"], tri[0]["color"], 1
-        )
-        assert_rasterizer_vertex(
-            results[1], tri[1]["position_proj"], tri[1]["color"], 1
-        )
-        assert_rasterizer_vertex(
-            results[2], tri[2]["position_proj"], tri[2]["color"], 1
-        )
+        assert_rasterizer_vertex(results[0], tri[0]["position_ndc"], tri[0]["color"], 1)
+        assert_rasterizer_vertex(results[1], tri[1]["position_ndc"], tri[1]["color"], 1)
+        assert_rasterizer_vertex(results[2], tri[2]["position_ndc"], tri[2]["color"], 1)
 
     sim = Simulator(t)
     sim.add_clock(1e-6)
@@ -330,13 +333,13 @@ def test_triangle_back_face_uses_back_color():
     async def checker(ctx, results):
         assert len(results) == 3
         assert_rasterizer_vertex(
-            results[0], tri[0]["position_proj"], tri[0]["color_back"], 0
+            results[0], tri[0]["position_ndc"], tri[0]["color_back"], 0
         )
         assert_rasterizer_vertex(
-            results[1], tri[1]["position_proj"], tri[1]["color_back"], 0
+            results[1], tri[1]["position_ndc"], tri[1]["color_back"], 0
         )
         assert_rasterizer_vertex(
-            results[2], tri[2]["position_proj"], tri[2]["color_back"], 0
+            results[2], tri[2]["position_ndc"], tri[2]["color_back"], 0
         )
 
     sim = Simulator(t)
