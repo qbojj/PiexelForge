@@ -1,6 +1,6 @@
 from amaranth import *
 from amaranth.lib import data, stream, wiring
-from amaranth.lib.wiring import Out
+from amaranth.lib.wiring import In, Out
 from amaranth_soc import csr
 
 from gpu.utils.math import FixedPointInv, SimpleOpModule
@@ -32,15 +32,27 @@ class VertexTransform(wiring.Component):
     TODO: support for configurable amount of multiplyer circuits (for now 4)
     """
 
-    is_vertex: stream.Signature(VertexLayout)
-    os_vertex: stream.Signature(ShadingVertexLayout)
+    is_vertex: In(stream.Signature(VertexLayout))
+    os_vertex: Out(stream.Signature(ShadingVertexLayout))
 
     ready: Out(1)
 
     class MatrixReg(csr.Register, access="rw"):
-        def __init__(self, size=16):
+        def __init__(self, size=16, init=None):
+            if init is None:
+                # identity matrix
+                match size:
+                    case 9:
+                        init = [1.0 if i % 4 == 0 else 0.0 for i in range(9)]
+                    case 16:
+                        init = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
+                    case _:
+                        init = [0.0 for _ in range(size)]
+
             super().__init__(
-                csr.Field(csr.action.RW, data.ArrayLayout(FixedPoint_mem, size))
+                csr.Field(
+                    csr.action.RW, data.ArrayLayout(FixedPoint_mem, size), init=init
+                )
             )
 
     class EnablementReg(csr.Register, access="rw"):
@@ -49,7 +61,7 @@ class VertexTransform(wiring.Component):
                 {
                     "normal": csr.Field(csr.action.RW, 1),
                 }
-                + {
+                | {
                     f"texture_{i}": csr.Field(csr.action.RW, 1)
                     for i in range(num_textures)
                 }
@@ -115,7 +127,7 @@ class VertexTransform(wiring.Component):
                 "result": o_data.normal_view,
                 "matrix": self.normal_mv_inv_t.f.data,
                 "vector": i_data.normal,
-                "enabled": self.enabled.f.data.normal,
+                "enabled": self.enabled.f.normal.data,
                 "dim": 3,
             },
         ] + [
@@ -124,7 +136,7 @@ class VertexTransform(wiring.Component):
                 "result": o_data.texcoords[i],
                 "matrix": self.texture_transforms[i].f.data,
                 "vector": i_data.texcoords[i],
-                "enabled": self.enabled.f.data[f"texture_{i}"],
+                "enabled": self.enabled.f[f"texture_{i}"].data,
                 "dim": 4,
             }
             for i in range(num_textures)
@@ -135,8 +147,9 @@ class VertexTransform(wiring.Component):
 
         with m.FSM():
             with m.State("IDLE"):
-                m.d.comb += self.ready.eq(~self.os_vertex.valid)
-                with m.If(self.is_vertex.valid & self.os_vertex.ready):
+                m.d.comb += self.ready.eq(1)
+                with m.If(self.is_vertex.valid):
+                    m.d.comb += self.is_vertex.ready.eq(1)
                     m.d.sync += [
                         i_data.eq(self.is_vertex.payload),
                     ]
@@ -168,9 +181,7 @@ class VertexTransform(wiring.Component):
                             )
                             m.d.comb += [
                                 mul_a.eq(attr["vector"][j]),
-                                mul_b.eq_reinterpret(
-                                    attr["matrix"][i * attr["dim"] + j]
-                                ),
+                                mul_b.eq(attr["matrix"][i * attr["dim"] + j]),
                             ]
 
                             m.next = (

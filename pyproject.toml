@@ -19,7 +19,8 @@ dev = [
     "pytest-xdist == 3.5.0",
     "hypothesis == 6.99.6",
     # Other
-    "pre-commit >= 2.20.0"
+    "pre-commit >= 2.20.0",
+    "numpy >= 2.3.0"
 ]
 
 [tool.black]

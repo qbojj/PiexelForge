@@ -16,9 +16,6 @@ class PrimitiveAssembly(wiring.Component):
     Output: RasterizerLayout
     """
 
-    is_vertex: In(stream.Signature(PrimitiveAssemblyLayout))
-    os_primitive: Out(stream.Signature(RasterizerLayout))
-
     class PrimitiveReg(csr.Register, access="rw"):
         type: csr.Field(csr.action.RW, PrimitiveType)
 
@@ -29,7 +26,6 @@ class PrimitiveAssembly(wiring.Component):
         winding: csr.Field(csr.action.RW, FrontFace)
 
     def __init__(self):
-        super().__init__()
         regs = csr.Builder(addr_width=8, data_width=8)
         self.prim_type = regs.add(
             name="prim_type", reg=self.PrimitiveReg(), offset=0x00
@@ -41,11 +37,24 @@ class PrimitiveAssembly(wiring.Component):
             name="prim_winding", reg=self.PrimitiveWindingReg(), offset=0x08
         )
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus = self.csr_bridge.bus
+        super().__init__(
+            {
+                "is_vertex": In(stream.Signature(PrimitiveAssemblyLayout)),
+                "os_primitive": Out(stream.Signature(RasterizerLayout)),
+                "ready": Out(1),
+                "csr_bus": Out(self.csr_bridge.bus.signature),
+            }
+        )
+        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
 
     def elaborate(self, platform):
         m = Module()
 
+        m.submodules.csr_bridge = self.csr_bridge
+
+        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
+
+        # Advertise readiness to upstream; simple reflection of output backpressure.
         m.d.comb += self.ready.eq(~self.os_primitive.valid)
 
         with m.If(self.os_primitive.ready):
@@ -53,12 +62,17 @@ class PrimitiveAssembly(wiring.Component):
 
         with m.Switch(self.prim_type.f.type.data):
             with m.Case(PrimitiveType.POINTS, PrimitiveType.LINES):
-                with m.If(self.is_vertex.valid):
+                # Simple pass-through for points and lines
+                with m.If(
+                    self.is_vertex.valid
+                    & (~self.os_primitive.valid | self.os_primitive.ready)
+                ):
                     m.d.comb += self.is_vertex.ready.eq(1)
 
                     m.d.sync += [
                         self.os_primitive.valid.eq(1),
-                        self.os_primitive.p.position_proj.eq(
+                        # Rasterizer expects NDC; pass through projected coords for now.
+                        self.os_primitive.p.position_ndc.eq(
                             self.is_vertex.p.position_proj
                         ),
                         self.os_primitive.p.texcoords.eq(self.is_vertex.p.texcoords),
@@ -74,14 +88,14 @@ class PrimitiveAssembly(wiring.Component):
                 def send_vertex(m, ff, idx):
                     m.d.sync += [
                         self.os_primitive.valid.eq(1),
-                        self.os_primitive.p.position_proj.eq(
-                            trinagle[idx].p.position_proj
+                        self.os_primitive.p.position_ndc.eq(
+                            trinagle[idx].position_proj
                         ),
-                        self.os_primitive.p.texcoords.eq(trinagle[idx].p.texcoords),
+                        self.os_primitive.p.texcoords.eq(trinagle[idx].texcoords),
                         self.os_primitive.p.color.eq(
-                            Mux(ff, trinagle[idx].p.color, trinagle[idx].p.color_back)
+                            Mux(ff, trinagle[idx].color, trinagle[idx].color_back)
                         ),
-                        self.os_primitive.p.front_facing.eq(front_facing),
+                        self.os_primitive.p.front_facing.eq(ff),
                     ]
 
                 with m.FSM():
@@ -113,16 +127,17 @@ class PrimitiveAssembly(wiring.Component):
                         a = -1/2 * ( (x1 - x0)*(y2 - y1) - (x2 - x1)*(y1 - y0) )
                         """
 
-                        vtx0 = trinagle[0].p.position_proj
-                        vtx1 = trinagle[1].p.position_proj
-                        vtx2 = trinagle[2].p.position_proj
+                        vtx0 = trinagle[0].position_proj
+                        vtx1 = trinagle[1].position_proj
+                        vtx2 = trinagle[2].position_proj
 
                         m.d.comb += [
-                            v0[0].eq(vtx1.x - vtx0.x),
-                            v0[1].eq(vtx1.y - vtx0.y),
-                            v1[0].eq(vtx2.x - vtx1.x),
-                            v1[1].eq(vtx2.y - vtx1.y),
-                            a.eq(-((v0[0] * v1[1]) - (v1[0] * v0[1])) >> 1),
+                            v0[0].eq(vtx1[0] - vtx0[0]),
+                            v0[1].eq(vtx1[1] - vtx0[1]),
+                            v1[0].eq(vtx2[0] - vtx1[0]),
+                            v1[1].eq(vtx2[1] - vtx1[1]),
+                            # Twice the signed area (negative for CW when front face is CCW)
+                            a.eq(((v0[0] * v1[1]) - (v1[0] * v0[1])) >> 1),
                         ]
 
                         ff = Signal()
@@ -132,20 +147,40 @@ class PrimitiveAssembly(wiring.Component):
                             with m.Case(FrontFace.CW):
                                 m.d.comb += ff.eq(a < 0)
 
-                        with m.If(ff & (self.prim_cull.f.cull.data & CullFace.FRONT)):
+                        with m.If(
+                            ff
+                            & (
+                                (
+                                    self.prim_cull.f.cull.data.as_value()
+                                    & CullFace.FRONT.value
+                                )
+                                != 0
+                            )
+                        ):
                             m.next = "WAIT_VERTEX"  # cull primitive
-                        with m.Elif(~ff & (self.prim_cull.f.cull.data & CullFace.BACK)):
+                        with m.Elif(
+                            ~ff
+                            & (
+                                (
+                                    self.prim_cull.f.cull.data.as_value()
+                                    & CullFace.BACK.value
+                                )
+                                != 0
+                            )
+                        ):
                             m.next = "WAIT_VERTEX"  # cull primitive
                         with m.Elif(self.os_primitive.ready | ~self.os_primitive.valid):
+                            # Register front_facing for use in subsequent states
+                            m.d.sync += front_facing.eq(ff)
                             send_vertex(m, ff, 0)
                             m.next = "SEND_VERTEX_1"
                     with m.State("SEND_VERTEX_1"):
                         with m.If(self.os_primitive.ready | ~self.os_primitive.valid):
-                            send_vertex(m, ff, 1)
+                            send_vertex(m, front_facing, 1)
                             m.next = "SEND_VERTEX_2"
                     with m.State("SEND_VERTEX_2"):
                         with m.If(self.os_primitive.ready | ~self.os_primitive.valid):
-                            send_vertex(m, ff, 2)
+                            send_vertex(m, front_facing, 2)
                             m.next = "WAIT_VERTEX"
 
         return m
