@@ -18,5 +18,5 @@ class PerVertexData(data.Struct):
 
 
 class InputData(data.Union):
-    per_vertex: PerVertexData
     constant_value: Vector4_mem
+    per_vertex: PerVertexData

@@ -87,7 +87,6 @@ class FixedPointInvSmallDomain(wiring.Component):
                     ]
                     m.next = "STEP_0"
             with m.State("STEP_0"):
-                m.d.sync += Print(Format("Iter {}: x = {}, v = {}", iter, x, self.i.p))
                 m.d.comb += [
                     mul_a.eq(x),
                     mul_b.eq(x),
@@ -208,16 +207,6 @@ class FixedPointInv(wiring.Component):
                     # shift back: divide by 2^shift_value
                     m.d.comb += inv_small.o.ready.eq(1)
 
-                    m.d.sync += Print(
-                        Format(
-                            "Input: {}, Leading zeros: {}, Shift value: {}, Inv small output: {}",
-                            v0,
-                            lz,
-                            shift_value,
-                            inv_small.o.p,
-                        )
-                    )
-
                     with m.If(shift_value >= 0):
                         m.d.sync += norm_value.eq(
                             inv_small.o.p << shift_value.as_unsigned()
@@ -230,15 +219,6 @@ class FixedPointInv(wiring.Component):
                     m.next = "SEND_RESULT"
             with m.State("SEND_RESULT"):
                 with m.If(self.o.ready | ~self.o.valid):
-                    m.d.sync += Print(
-                        Format(
-                            "Input: {}, Leading zeros: {}, Shift value: {}, Normalized value: {}",
-                            v0,
-                            lz,
-                            shift_value,
-                            norm_value,
-                        )
-                    )
                     ret = Signal(self._type)
                     with m.If(sgn):
                         m.d.comb += ret.as_value().eq(-norm_value)
@@ -247,17 +227,6 @@ class FixedPointInv(wiring.Component):
 
                     m.d.sync += self.o.p.eq(ret)
                     m.d.sync += self.o.valid.eq(1)
-
-                    m.d.sync += [
-                        Print(
-                            Format(
-                                "Input abs: {}, Input sign: {}, Output: {}",
-                                v0,
-                                sgn,
-                                ret,
-                            )
-                        )
-                    ]
 
                     m.next = "IDLE"
 

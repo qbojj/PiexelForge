@@ -3,7 +3,7 @@ from functools import reduce
 
 from amaranth import *
 from amaranth import ShapeCastable, ValueCastable
-from amaranth.lib import stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
 
 
@@ -341,5 +341,56 @@ class AnyRecombiner(wiring.Component):
                 self.o.valid.eq(1),
             ]
             m.d.comb += self.i[first_valid].ready.eq(1)
+
+        return m
+
+
+class WideStreamOutput(wiring.Component):
+    """
+    Splits wide output stream into multiple cycles.
+    """
+
+    def __init__(self, shape: ShapeCastable, max_width: int):
+        super().__init__(
+            {
+                "i": In(stream.Signature(data.ArrayLayout(shape, max_width))),
+                "n": In(stream.Signature(range(max_width + 1))),
+                "o": Out(stream.Signature(shape)),
+            }
+        )
+
+    def elaborate(self, platform):
+        m = Module()
+
+        n = Signal.like(self.n.p)
+        i = Signal.like(self.n.p)
+        p = Signal.like(self.i.p)
+
+        with m.FSM():
+            with m.State("IDLE"):
+                with m.If(self.i.valid & self.n.valid):
+                    m.d.comb += [
+                        self.i.ready.eq(1),
+                        self.n.ready.eq(1),
+                    ]
+                    with m.If(self.n.p > 0):
+                        m.d.sync += [
+                            n.eq(self.n.p),
+                            i.eq(0),
+                            p.eq(self.i.p),
+                            self.o.p.eq(self.i.p[0]),
+                            self.o.valid.eq(1),
+                        ]
+                        m.next = "SEND"
+            with m.State("SEND"):
+                with m.If(self.o.ready):
+                    with m.If(i + 1 < n):
+                        m.d.sync += [
+                            i.eq(i + 1),
+                            p.eq(p[i + 1]),
+                        ]
+                    with m.Else():
+                        m.d.sync += self.o.valid.eq(0)
+                        m.next = "IDLE"
 
         return m

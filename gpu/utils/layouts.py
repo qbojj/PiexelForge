@@ -61,6 +61,20 @@ class FramebufferInfoLayout(data.Struct):
     width: texture_coord_shape
     height: texture_coord_shape
 
+    # Viewport transform (NDC to screen space) - floats converted to fixed-point
+    viewport_x: FixedPoint
+    viewport_y: FixedPoint
+    viewport_width: FixedPoint
+    viewport_height: FixedPoint
+    viewport_min_depth: FixedPoint
+    viewport_max_depth: FixedPoint
+
+    # Scissor rectangle (rasterization clip region) - integer coordinates
+    scissor_offset_x: signed(32)
+    scissor_offset_y: signed(32)
+    scissor_width: unsigned(32)
+    scissor_height: unsigned(32)
+
     color_address: address_shape  # assume R8G8B8A8
     color_pitch: stride_shape  # in bytes
     depth_address: address_shape  # assume D16

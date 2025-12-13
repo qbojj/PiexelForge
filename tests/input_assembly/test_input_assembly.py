@@ -30,7 +30,7 @@ def make_test_input_assembly(
     color_data: InputData = default_data,
 ):
     dut = InputAssembly()
-    t = SimpleTestbench(mem_addr=addr, mem_size=1024)
+    t = SimpleTestbench(dut, mem_addr=addr, mem_size=1024)
 
     t.set_csrs(
         dut.csr_bus,
@@ -55,7 +55,7 @@ def make_test_input_assembly(
         await t.initialize_memory(ctx, addr, memory_data)
         await t.initialize_csrs(ctx)
 
-    sim = Simulator(t.make(dut))
+    sim = Simulator(t)
     sim.add_clock(1e-9)
     stream_testbench(
         sim,

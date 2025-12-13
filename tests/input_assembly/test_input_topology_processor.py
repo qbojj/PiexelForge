@@ -17,7 +17,7 @@ def make_test_input_topology_processor(
     base_vertex: int = 0,
 ):
     dut = InputTopologyProcessor()
-    t = SimpleTestbench()
+    t = SimpleTestbench(dut)
 
     t.set_csrs(
         dut.csr_bus,
@@ -33,7 +33,7 @@ def make_test_input_topology_processor(
         "input_topology_processor",
     )
 
-    sim = Simulator(t.make(dut))
+    sim = Simulator(t)
     sim.add_clock(1e-9)
     stream_testbench(
         sim,

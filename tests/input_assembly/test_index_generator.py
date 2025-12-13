@@ -15,7 +15,7 @@ def make_test_index_generator(
     expected: list[int],
 ):
     dut = IndexGenerator()
-    t = SimpleTestbench(mem_addr=0x80000000, mem_size=1024)
+    t = SimpleTestbench(dut, mem_addr=0x80000000, mem_size=1024)
 
     t.set_csrs(
         dut.csr_bus,
@@ -34,7 +34,7 @@ def make_test_index_generator(
         await t.initialize_memory(ctx, addr, memory_data)
         await t.initialize_csrs(ctx)
 
-    sim = Simulator(t.make(dut))
+    sim = Simulator(t)
     sim.add_clock(1e-9)
     stream_testbench(
         sim,

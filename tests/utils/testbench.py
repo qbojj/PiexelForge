@@ -14,9 +14,10 @@ def div_ceil(a: int, b: int) -> int:
     return (a + b - 1) // b
 
 
-class SimpleTestbench:
+class SimpleTestbench(Elaboratable):
     def __init__(
         self,
+        dut: Elaboratable | None = None,
         addr_width: int = wb_bus_addr_width,
         data_width: int = wb_bus_data_width,
         granularity: int = wb_bus_granularity,
@@ -24,41 +25,40 @@ class SimpleTestbench:
         mem_size: int = 1024 * 4,
         mem_addr: int = 0x80000000,
     ):
-        self.m = m = Module()
-
+        self.dut = dut
         self.data_width = data_width
         self.addr_width = addr_width
         self.granularity = granularity
         self.mem_size = mem_size
         self.mem_addr = mem_addr
 
-        m.submodules.arbiter = self.arbiter = Arbiter(
+        self.arbiter = Arbiter(
             addr_width=addr_width,
             data_width=data_width,
             granularity=granularity,
             features=features,
         )
 
-        m.submodules.decoder = self.decoder = Decoder(
+        self.decoder = Decoder(
             addr_width=addr_width,
             data_width=data_width,
             granularity=granularity,
             features=features,
         )
 
-        self.dbg_access = dbg_access = DebugAccess(
+        self.dbg_access = DebugAccess(
             addr_width=addr_width, data_width=data_width, granularity=granularity
         )
 
-        m.submodules.csr_decoder = self.csr_decoder = csr.Decoder(
+        self.csr_decoder = csr.Decoder(
             addr_width=20, data_width=granularity, alignment=3
         )
 
-        m.submodules.mem = self.mem = WishboneSRAM(
+        self.mem = WishboneSRAM(
             size=mem_size, data_width=data_width, granularity=granularity, writable=True
         )
 
-        self.arbiter.add(dbg_access)
+        self.arbiter.add(self.dbg_access)
         self.csrs = []
 
     def set_csrs(
@@ -80,19 +80,25 @@ class SimpleTestbench:
         self.csr_decoder.add(csr_bus, name=name)
         self.csrs.append((name, prepared_data))
 
-    def make(self, dut: Module | None) -> Module:
-        m = self.m
+    def elaborate(self, platform) -> Module:
+        m = Module()
+        m.submodules.arbiter = self.arbiter
+        m.submodules.decoder = self.decoder
+        m.submodules.csr_decoder = self.csr_decoder
+        m.submodules.mem = self.mem
+
         m.submodules.csr_bridge = self.csr_bridge = csr_bridge = WishboneCSRBridge(
             self.csr_decoder.bus, data_width=self.data_width
         )
+
         self.decoder.add(csr_bridge.wb_bus)
         self.decoder.add(self.mem.wb_bus, addr=self.mem_addr)
 
-        wiring.connect(self.m, self.arbiter.bus, self.decoder.bus)
+        wiring.connect(m, self.arbiter.bus, self.decoder.bus)
         self.arbiter.bus.memory_map = self.decoder.bus.memory_map
 
-        if dut is not None:
-            m.submodules.dut = dut
+        if self.dut is not None:
+            m.submodules.dut = self.dut
 
         return m
 

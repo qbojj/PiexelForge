@@ -6,6 +6,8 @@ from amaranth.lib.wiring import In, Out
 from amaranth.utils import exact_log2
 from amaranth_soc import csr
 from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
+from transactron import *
+from transactron.lib import *
 
 from ..utils.layouts import (
     VertexLayout,
@@ -37,14 +39,6 @@ class IndexGenerator(wiring.Component):
     TODO: add memory burst support
     """
 
-    os_index: Out(stream.Signature(index_shape))
-
-    bus: Out(
-        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
-    )
-
-    ready: Out(1)
-
     class StartReg(csr.Register, access="w"):
         def __init__(self):
             super().__init__(csr.Field(csr.action.W, unsigned(1)))
@@ -62,7 +56,6 @@ class IndexGenerator(wiring.Component):
             super().__init__(csr.Field(csr.action.RW, IndexKind))
 
     def __init__(self):
-        super().__init__()
         regs = csr.Builder(addr_width=8, data_width=8)
         self.start = regs.add("start", self.StartReg(), offset=0x00)
 
@@ -70,12 +63,28 @@ class IndexGenerator(wiring.Component):
         self.count = regs.add("count", self.CountReg(), offset=0x08)
         self.kind = regs.add("kind", self.KindReg(), offset=0x10)
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus = self.csr_bridge.bus
+
+        super().__init__(
+            {
+                "os_index": Out(stream.Signature(index_shape)),
+                "bus": Out(
+                    wishbone_Signature(
+                        addr_width=wb_bus_addr_width, data_width=wb_bus_data_width
+                    )
+                ),
+                "ready": Out(1),
+                "csr_bus": Out(self.csr_bridge.bus.signature),
+            }
+        )
+
+        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
         m.submodules += [self.csr_bridge]
+
+        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         address = Signal.like(self.address.f.data)
         kind = self.kind.f.data
@@ -130,15 +139,6 @@ class IndexGenerator(wiring.Component):
                     m.d.sync += [
                         cur_idx.eq(0),
                         address.eq(self.address.f.data),
-                        Print(
-                            Format(
-                                "Starting index generator with: "
-                                "address={:#010x}, count={}, kind={}",
-                                self.address.f.data,
-                                count,
-                                kind,
-                            )
-                        ),
                     ]
                     with m.If(count == 0):
                         m.next = "IDLE"
@@ -164,18 +164,12 @@ class IndexGenerator(wiring.Component):
                     self.bus.adr.eq(address[len(offset) :]),
                     self.bus.we.eq(0),
                     self.bus.stb.eq(1),
-                    self.bus.sel.eq(~0),  # TODO: access only what is needed
+                    self.bus.sel.eq(~0),
                 ]
                 m.next = "MEM_READ_WAIT"
             with m.State("MEM_READ_WAIT"):
-                # wait for ack and our index to be empty
                 with m.If(self.bus.ack):
-                    m.d.sync += [
-                        # deassert memory access
-                        self.bus.cyc.eq(0),
-                        self.bus.stb.eq(0),
-                        data_read.eq(self.bus.dat_r),
-                    ]
+                    m.d.sync += data_read.eq(self.bus.dat_r)
                     m.next = "INDEX_SEND"
             with m.State("INDEX_SEND"):
                 with m.If(~self.os_index.valid | self.os_index.ready):
@@ -207,13 +201,7 @@ class InputTopologyProcessor(wiring.Component):
     Gets input index stream and outputs vertex index stream based on input topology.
     """
 
-    is_index: In(stream.Signature(index_shape))
-    os_index: Out(stream.Signature(index_shape))
-
-    ready: Out(1)
-
     def __init__(self):
-        super().__init__()
         regs = csr.Builder(addr_width=4, data_width=8)
 
         self.input_topology = regs.add(
@@ -238,12 +226,22 @@ class InputTopologyProcessor(wiring.Component):
         )
 
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus = self.csr_bridge.bus
+        super().__init__(
+            {
+                "is_index": In(stream.Signature(index_shape)),
+                "os_index": Out(stream.Signature(index_shape)),
+                "ready": Out(1),
+                "csr_bus": Out(self.csr_bridge.bus.signature),
+            }
+        )
+
+        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
         m.submodules += [self.csr_bridge]
+        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         # values for triangle strips/fans and line strips
         v1 = Signal(index_shape)
@@ -409,15 +407,6 @@ class InputAssembly(wiring.Component):
     TODO: add memory burst support
     """
 
-    is_index: In(stream.Signature(index_shape))
-    os_vertex: Out(stream.Signature(VertexLayout))
-
-    bus: Out(
-        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
-    )
-
-    ready: Out(1)
-
     class InputModeReg(csr.Register, access="rw"):
         def __init__(self):
             super().__init__(csr.Field(csr.action.RW, InputMode))
@@ -440,7 +429,6 @@ class InputAssembly(wiring.Component):
         info: "InputAssembly.InputDataReg"
 
     def __init__(self):
-        super().__init__()
         regs = csr.Builder(addr_width=8, data_width=8)
 
         def make_reg_set(base):
@@ -465,12 +453,28 @@ class InputAssembly(wiring.Component):
             self.color = make_reg_set(0x40 + num_textures * 0x20)
 
         self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus = self.csr_bridge.bus
+
+        super().__init__(
+            {
+                "is_index": In(stream.Signature(index_shape)),
+                "os_vertex": Out(stream.Signature(VertexLayout)),
+                "bus": Out(
+                    wishbone_Signature(
+                        addr_width=wb_bus_addr_width, data_width=wb_bus_data_width
+                    )
+                ),
+                "csr_bus": Out(self.csr_bridge.bus.signature),
+                "ready": Out(1),
+            }
+        )
+
+        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
         m.submodules += [self.csr_bridge]
+        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         # fetch vertex at given index based on vertex input attributes
 
