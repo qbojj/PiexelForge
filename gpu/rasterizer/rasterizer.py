@@ -1,6 +1,7 @@
 from amaranth import *
 from amaranth.lib import stream, wiring
 from amaranth.lib.wiring import In, Out
+from transactron.utils.amaranth_ext.functions import max_value, min_value
 
 from ..utils import math as gpu_math
 from ..utils.layouts import FragmentLayout, FramebufferInfoLayout, RasterizerLayout
@@ -44,15 +45,22 @@ class TriangleRasterizer(wiring.Component):
         screen_x = Array(Signal(FixedPoint) for _ in range(3))
         screen_y = Array(Signal(FixedPoint) for _ in range(3))
 
-        # Bounding box
-        min_x = Signal(FixedPoint)
-        min_y = Signal(FixedPoint)
-        max_x = Signal(FixedPoint)
-        max_y = Signal(FixedPoint)
+        # Bounding box (integer pixel coordinates)
+        bb_min_x = Signal(signed(32))
+        bb_min_y = Signal(signed(32))
+        bb_max_x = Signal(signed(32))
+        bb_max_y = Signal(signed(32))
 
-        # Current pixel being tested
-        px = Signal(FixedPoint)
-        py = Signal(FixedPoint)
+        # Clamped bounding box (after scissor)
+        min_x = Signal(unsigned(32))
+        min_y = Signal(unsigned(32))
+        max_x = Signal(unsigned(32))
+        max_y = Signal(unsigned(32))
+        completely_outside = Signal()
+
+        # Current pixel being tested (integer coordinates)
+        px = Signal(signed(32))
+        py = Signal(signed(32))
 
         # Barycentric coordinates (unnormalized edge function values)
         w0 = Signal(FixedPoint)
@@ -96,19 +104,26 @@ class TriangleRasterizer(wiring.Component):
                 # Viewport transform: NDC [-1,1] to screen space
                 # screen_x = viewport_x + (ndc_x + 1) * viewport_width / 2
                 # screen_y = viewport_y + (ndc_y + 1) * viewport_height / 2
-                viewport_half_w = self.fb_info.viewport_width >> 1
-                viewport_half_h = self.fb_info.viewport_height >> 1
                 viewport_x = self.fb_info.viewport_x
                 viewport_y = self.fb_info.viewport_y
-                one = FixedPoint.const(1.0)
 
                 for i in range(3):
                     m.d.sync += [
                         screen_x[i].eq(
-                            viewport_x + (vtx[i].position_ndc.x + one) * viewport_half_w
+                            viewport_x
+                            + (
+                                (vtx[i].position_ndc[0] + 1)
+                                * self.fb_info.viewport_width
+                                >> 1
+                            )
                         ),
                         screen_y[i].eq(
-                            viewport_y + (vtx[i].position_ndc.y + one) * viewport_half_h
+                            viewport_y
+                            + (
+                                (vtx[i].position_ndc[1] + 1)
+                                * self.fb_info.viewport_height
+                                >> 1
+                            )
                         ),
                     ]
 
@@ -116,60 +131,49 @@ class TriangleRasterizer(wiring.Component):
 
             with m.State("BOUNDING_BOX"):
                 # Compute triangle area for barycentric coordinates
-                m.d.sync += area.eq(
-                    edge_fn(
-                        screen_x[0],
-                        screen_y[0],
-                        screen_x[1],
-                        screen_y[1],
-                        screen_x[2],
-                        screen_y[2],
-                    )
+                area_val = edge_fn(
+                    screen_x[0],
+                    screen_y[0],
+                    screen_x[1],
+                    screen_y[1],
+                    screen_x[2],
+                    screen_y[2],
                 )
+                m.d.sync += area.eq(area_val)
 
                 # Compute bounding box
-                bb_min_x = Mux(
-                    screen_x[0] < screen_x[1],
-                    Mux(screen_x[0] < screen_x[2], screen_x[0], screen_x[2]),
-                    Mux(screen_x[1] < screen_x[2], screen_x[1], screen_x[2]),
-                )
-                bb_min_y = Mux(
-                    screen_y[0] < screen_y[1],
-                    Mux(screen_y[0] < screen_y[2], screen_y[0], screen_y[2]),
-                    Mux(screen_y[1] < screen_y[2], screen_y[1], screen_y[2]),
-                )
-                bb_max_x = Mux(
-                    screen_x[0] > screen_x[1],
-                    Mux(screen_x[0] > screen_x[2], screen_x[0], screen_x[2]),
-                    Mux(screen_x[1] > screen_x[2], screen_x[1], screen_x[2]),
-                )
-                bb_max_y = Mux(
-                    screen_y[0] > screen_y[1],
-                    Mux(screen_y[0] > screen_y[2], screen_y[0], screen_y[2]),
-                    Mux(screen_y[1] > screen_y[2], screen_y[1], screen_y[2]),
-                )
+                m.d.sync += [
+                    bb_min_x.eq(min_value(*[x.floor() for x in screen_x])),
+                    bb_max_x.eq(max_value(*[x.ceil() for x in screen_x])),
+                    bb_min_y.eq(min_value(*[y.floor() for y in screen_y])),
+                    bb_max_y.eq(max_value(*[y.ceil() for y in screen_y])),
+                ]
 
-                # Scissor rectangle bounds (convert integer coords to fixed-point for comparison)
-                scissor_x = FixedPoint(self.fb_info.scissor_offset_x)
-                scissor_y = FixedPoint(self.fb_info.scissor_offset_y)
-                scissor_max_x = scissor_x + FixedPoint(self.fb_info.scissor_width) - 1
-                scissor_max_y = scissor_y + FixedPoint(self.fb_info.scissor_height) - 1
+                m.next = "CULLING"
+
+            with m.State("CULLING"):
+                # Scissor rectangle bounds (convert to fixed-point for comparison)
+                scissor_min_x = self.fb_info.scissor_offset_x
+                scissor_min_y = self.fb_info.scissor_offset_y
+                scissor_max_x = scissor_min_x + self.fb_info.scissor_width - 1
+                scissor_max_y = scissor_min_y + self.fb_info.scissor_height - 1
 
                 # Clamp bounding box to scissor rectangle
                 m.d.sync += [
-                    min_x.eq(Mux(bb_min_x < scissor_x, scissor_x, bb_min_x)),
-                    min_y.eq(Mux(bb_min_y < scissor_y, scissor_y, bb_min_y)),
+                    min_x.eq(Mux(bb_min_x < scissor_min_x, scissor_min_x, bb_min_x)),
+                    min_y.eq(Mux(bb_min_y < scissor_min_y, scissor_min_y, bb_min_y)),
                     max_x.eq(Mux(bb_max_x > scissor_max_x, scissor_max_x, bb_max_x)),
                     max_y.eq(Mux(bb_max_y > scissor_max_y, scissor_max_y, bb_max_y)),
                 ]
 
-                # Guard-band culling: skip if triangle is completely outside scissor
-                completely_outside = (
-                    (bb_max_x < scissor_x)
-                    | (bb_max_y < scissor_y)
-                    | (bb_min_x > scissor_max_x)
-                    | (bb_min_y > scissor_max_y)
-                )
+                m.d.comb += [
+                    completely_outside.eq(
+                        (bb_max_x < scissor_min_x)
+                        | (bb_max_y < scissor_min_y)
+                        | (bb_min_x > scissor_max_x)
+                        | (bb_min_y > scissor_max_y)
+                    ),
+                ]
 
                 with m.If(completely_outside):
                     # Triangle is completely outside, skip it
@@ -178,7 +182,7 @@ class TriangleRasterizer(wiring.Component):
                     # Request reciprocal of area for barycentric normalization
                     m.d.comb += [
                         inv.i.valid.eq(1),
-                        inv.i.payload.eq(area),
+                        inv.i.payload.eq(area_val),
                     ]
 
                     with m.If(inv.i.ready):
@@ -201,11 +205,14 @@ class TriangleRasterizer(wiring.Component):
                 m.next = "SCAN"
 
             with m.State("SCAN"):
-                # Compute barycentric coordinates
+                # Compute barycentric coordinates using fixed-point screen coords
+                # Note: px, py are integer pixel coordinates; convert to fixed-point for edge fn
+                # Fixed-point integer (px, 0) is represented as px << frac_bits
+                # But for Amaranth, we construct this directly in the edge function
+
                 e0 = edge_fn(screen_x[1], screen_y[1], screen_x[2], screen_y[2], px, py)
                 e1 = edge_fn(screen_x[2], screen_y[2], screen_x[0], screen_y[0], px, py)
                 e2 = edge_fn(screen_x[0], screen_y[0], screen_x[1], screen_y[1], px, py)
-
                 # Check if pixel is inside triangle (all edge functions have same sign as area)
                 inside = ((e0 >= 0) & (e1 >= 0) & (e2 >= 0)) | (
                     (e0 <= 0) & (e1 <= 0) & (e2 <= 0)
@@ -227,24 +234,24 @@ class TriangleRasterizer(wiring.Component):
                 # inv_w_sum = w0*inv_w0 + w1*inv_w1 + w2*inv_w2
                 m.d.sync += [
                     inv_w_sum.eq(
-                        w0 * vtx[0].position_ndc.w
-                        + w1 * vtx[1].position_ndc.w
-                        + w2 * vtx[2].position_ndc.w
+                        w0 * vtx[0].position_ndc[3]
+                        + w1 * vtx[1].position_ndc[3]
+                        + w2 * vtx[2].position_ndc[3]
                     ),
                     # Depth uses linear (non-perspective-correct) interpolation per spec
                     depth_num.eq(
-                        w0 * vtx[0].position_ndc.z
-                        + w1 * vtx[1].position_ndc.z
-                        + w2 * vtx[2].position_ndc.z
+                        w0 * vtx[0].position_ndc[2]
+                        + w1 * vtx[1].position_ndc[2]
+                        + w2 * vtx[2].position_ndc[2]
                     ),
                 ]
 
                 # Compute color numerators
                 for i in range(4):
                     m.d.sync += color_num[i].eq(
-                        w0 * vtx[0].color[i] * vtx[0].position_ndc.w
-                        + w1 * vtx[1].color[i] * vtx[1].position_ndc.w
-                        + w2 * vtx[2].color[i] * vtx[2].position_ndc.w
+                        w0 * vtx[0].color[i] * vtx[0].position_ndc[3]
+                        + w1 * vtx[1].color[i] * vtx[1].position_ndc[3]
+                        + w2 * vtx[2].color[i] * vtx[2].position_ndc[3]
                     )
 
                 # Compute texcoord numerators
@@ -253,13 +260,13 @@ class TriangleRasterizer(wiring.Component):
                         m.d.sync += texcoord_num[tex_idx][comp_idx].eq(
                             w0
                             * vtx[0].texcoords[tex_idx][comp_idx]
-                            * vtx[0].position_ndc.w
+                            * vtx[0].position_ndc[3]
                             + w1
                             * vtx[1].texcoords[tex_idx][comp_idx]
-                            * vtx[1].position_ndc.w
+                            * vtx[1].position_ndc[3]
                             + w2
                             * vtx[2].texcoords[tex_idx][comp_idx]
-                            * vtx[2].position_ndc.w
+                            * vtx[2].position_ndc[3]
                         )
 
                 # Request reciprocal of inv_w_sum
@@ -282,31 +289,28 @@ class TriangleRasterizer(wiring.Component):
             with m.State("OUTPUT"):
                 # Output interpolated values
                 # Depth uses normalized barycentric coords (linear interpolation per spec)
+                m.d.comb += self.os_fragment.valid.eq(1)
+
+                Memory
+
                 m.d.comb += [
-                    self.os_fragment.valid.eq(1),
-                    self.os_fragment.payload.depth.eq(depth_num * area_recip),
-                    self.os_fragment.payload.color[0].eq(
-                        color_num[0] * inv_w_sum_recip
-                    ),
-                    self.os_fragment.payload.color[1].eq(
-                        color_num[1] * inv_w_sum_recip
-                    ),
-                    self.os_fragment.payload.color[2].eq(
-                        color_num[2] * inv_w_sum_recip
-                    ),
-                    self.os_fragment.payload.color[3].eq(
-                        color_num[3] * inv_w_sum_recip
-                    ),
-                    self.os_fragment.payload.coord_pos[0].eq(px.truncate()),
-                    self.os_fragment.payload.coord_pos[1].eq(py.truncate()),
+                    self.os_fragment.p.coord_pos[0].eq(px),
+                    self.os_fragment.p.coord_pos[1].eq(py),
                 ]
 
+                m.d.comb += self.os_fragment.p.depth.eq(depth_num * area_recip)
+
+                for i in range(len(color_num)):
+                    m.d.comb += self.os_fragment.p.color[i].eq(
+                        color_num[i] * inv_w_sum_recip
+                    )
+
                 # Connect texcoords
-                for tex_idx in range(2):
-                    for comp_idx in range(4):
-                        m.d.comb += self.os_fragment.payload.texcoords[tex_idx][
-                            comp_idx
-                        ].eq(texcoord_num[tex_idx][comp_idx] * inv_w_sum_recip)
+                for tex_idx in range(len(self.os_fragment.p.texcoords)):
+                    for comp_idx in range(len(self.os_fragment.p.texcoords[tex_idx])):
+                        m.d.comb += self.os_fragment.p.texcoords[tex_idx][comp_idx].eq(
+                            texcoord_num[tex_idx][comp_idx] * inv_w_sum_recip
+                        )
 
                 with m.If(self.os_fragment.ready):
                     m.next = "ADVANCE"

@@ -114,11 +114,14 @@ class Shape(hdl.ShapeCastable):
         if self.signed:
             v1 = Mux((integer < 0) & (fract > 0), integer + 1, integer)
             v2 = Mux((integer < 0) & (fract > 0), len_pow - fract_part, fract_part)
+
+            sgn = Mux(value < 0, hdl.Const(ord("-"), 16), hdl.Const(ord("\0"), 16))
+
+            return Format("{:s}{:d}.{:0{}d}", sgn, abs(v1), v2, decimal_length)
         else:
             v1 = integer
             v2 = fract_part
-
-        return Format("{:-d}.{:0{}d}", v1, v2, decimal_length)
+            return Format("{:d}.{:0{}d}", abs(v1), v2, decimal_length)
 
 
 class SQ(Shape):
@@ -215,6 +218,15 @@ class Value(hdl.ValueCastable):
             )
         clamped = self.reshape(shape.f_bits).clamp(shape.min(), shape.max())
         return Value(shape, clamped.as_value())
+
+    def floor(self) -> hdl.Value:
+        return self.as_value() >> self.f_bits
+
+    def ceil(self) -> hdl.Value:
+        fractional_mask = (1 << self.f_bits) - 1
+        has_fraction = (self.as_value() & fractional_mask) != 0
+        integer_part = self.floor()
+        return integer_part + Mux(has_fraction, 1, 0)
 
     def _binary_op(
         self,

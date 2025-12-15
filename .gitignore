@@ -13,3 +13,9 @@ test.gtkw
 
 *.gtkw
 *.vcd
+
+*.ppm
+*.png
+*.jpg
+*.jpeg
+*.bmp

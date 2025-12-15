@@ -338,7 +338,7 @@ def test_clipper(test_name, prim_type, input_vertices, expected_count):
         output_stream=dut.os_vertex,
         output_data_checker=output_checker,
         init_process=init_process,
-        idle_for=1000,  # Allow time for clipping computation
+        idle_for=300,  # Allow time for clipping computation
     )
 
     sim.run()
@@ -422,7 +422,7 @@ def test_clipper_interpolation():
         output_stream=dut.os_vertex,
         output_data_checker=output_checker,
         init_process=init_process,
-        idle_for=100,
+        idle_for=300,
     )
 
     sim.run()

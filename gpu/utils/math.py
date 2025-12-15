@@ -1,6 +1,7 @@
 from amaranth import *
 from amaranth.lib import stream, wiring
 from amaranth.lib.wiring import In, Out
+from transactron.utils.amaranth_ext.functions import sum_value
 
 from . import fixed
 from .stream import StreamToVector, VectorToStream
@@ -476,10 +477,10 @@ class FixedPointVecNormalize(wiring.Component):
         m = Module()
 
         elem_type = self._type.elem_shape
-        unsiged_elem_type = fixed.UQ(elem_type.i_bits, elem_type.f_bits)
+        unsigned_elem_type = fixed.UQ(elem_type.i_bits, elem_type.f_bits)
 
         m.submodules.inv_sqrt = inv_sqrt = FixedPointInvSqrt(
-            unsiged_elem_type, steps=self._steps
+            unsigned_elem_type, steps=self._steps
         )
 
         m.submodules.vec_to_stream_a = v2s_a = VectorToStream(self._type)
@@ -519,7 +520,7 @@ class FixedPointVecNormalize(wiring.Component):
                 with m.If(s2v.o.valid):
                     m.d.comb += s2v.o.ready.eq(1)
                     m.d.sync += [
-                        inv_sqrt.i.p.eq(sum(s2v.o.p, start=fixed.Const(0.0))),
+                        inv_sqrt.i.p.eq(sum_value(*s2v.o.p)),
                         inv_sqrt.i.valid.eq(1),
                     ]
                     m.next = "INV_SQRT"
