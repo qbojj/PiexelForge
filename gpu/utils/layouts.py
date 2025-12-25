@@ -55,6 +55,7 @@ class FragmentLayout(data.Struct):
     texcoords: texture_coords
     color: Vector4  # rgba in linear space
     coord_pos: texture_position
+    front_facing: unsigned(1)
 
 
 class FramebufferInfoLayout(data.Struct):

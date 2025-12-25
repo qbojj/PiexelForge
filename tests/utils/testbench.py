@@ -91,8 +91,8 @@ class SimpleTestbench(Elaboratable):
             self.csr_decoder.bus, data_width=self.data_width
         )
 
-        self.decoder.add(csr_bridge.wb_bus)
         self.decoder.add(self.mem.wb_bus, addr=self.mem_addr)
+        self.decoder.add(csr_bridge.wb_bus)
 
         wiring.connect(m, self.arbiter.bus, self.decoder.bus)
         self.arbiter.bus.memory_map = self.decoder.bus.memory_map

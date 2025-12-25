@@ -56,6 +56,7 @@ def stream_testbench(
     output_stream: stream.Interface | None = None,
     expected_output_data: list | None = None,
     output_data_checker: Callable | None = None,
+    final_checker: Callable | None = None,
     is_finished: Value = C(1),
     init_process: Callable | None = None,
     wait_after_supposed_finish: int | None = None,
@@ -81,6 +82,16 @@ def stream_testbench(
 
         if expected_output_data is not None:
             output_data_checker = data_checker(expected_output_data)
+
+    if idle_for is not None:
+        assert (
+            output_stream is not None
+        ), "output_stream must be provided to idle based on its valid signal."
+
+    if output_data_checker is not None or expected_output_data is not None:
+        assert (
+            output_stream is not None
+        ), "output_stream must be provided to verify output data."
 
     is_initialized = Signal(1) if init_process is not None else C(1)
     all_data_sent = Signal(1) if input_data is not None else C(1)
@@ -112,6 +123,10 @@ def stream_testbench(
         await init_process(ctx)
         ctx.set(is_initialized, 1)
 
+    async def final_tb(ctx: SimulatorContext):
+        await ctx.tick().until(stop_reading)
+        await final_checker(ctx)
+
     if input_data is not None:
         sim.add_testbench(input_tb)
 
@@ -124,5 +139,8 @@ def stream_testbench(
     if wait_after_supposed_finish is not None:
         sim.add_testbench(wait_tb)
 
-    if idle_for is not None and output_stream is not None:
+    if idle_for is not None:
         sim.add_testbench(idle_tb)
+
+    if final_checker is not None:
+        sim.add_testbench(final_tb)

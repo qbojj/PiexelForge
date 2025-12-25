@@ -229,6 +229,11 @@ class Value(hdl.ValueCastable):
     def ceil(self) -> hdl.Value:
         return self.floor() + (self.as_value()[: self.f_bits] != 0)
 
+    def round(self) -> hdl.Value:
+        if self.f_bits == 0:
+            return self.as_value()
+        return (self + Const(0.5)).floor()
+
     def _binary_op(
         self,
         rhs,
@@ -334,6 +339,9 @@ class Value(hdl.ValueCastable):
 
     def __eq__(self, other):
         return self._binary_compare(other, "__eq__")
+
+    def __ne__(self, other):
+        return self._binary_compare(other, "__ne__")
 
     def __repr__(self):
         return f"fixed.Value({self._shape!r}, {self._target!r})"

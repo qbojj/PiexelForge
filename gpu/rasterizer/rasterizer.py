@@ -385,6 +385,7 @@ class TriangleRasterizer(wiring.Component):
                             )
                         )
 
+                m.d.comb += self.os_fragment.front_facing.eq(vtx[0].front_facing)
                 m.d.comb += self.os_fragment.valid.eq(1)
 
                 with m.If(self.os_fragment.ready):
