@@ -48,8 +48,11 @@ ignore = ["F403", "F405"]
 
 [tool.pytest.ini_options]
 pythonpath = [
-  "."
+  ".",
 ]
 addopts = [
   "-n", "logical",
+]
+markers = [
+  "slow: marks tests as slow (run with '--run-slow')",
 ]

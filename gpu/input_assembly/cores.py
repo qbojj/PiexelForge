@@ -30,14 +30,6 @@ __all__ = [
 ]
 
 
-class IndexGeneratorConfigLayout(data.Struct):
-    """Index generator configuration"""
-
-    address: address_shape
-    count: unsigned(32)
-    kind: IndexKind
-
-
 class IndexGenerator(wiring.Component):
     """Generates index stream based on index stream description register.
 
@@ -52,15 +44,17 @@ class IndexGenerator(wiring.Component):
     )
     ready: Out(1)
 
-    config: In(IndexGeneratorConfigLayout)
+    c_address: In(address_shape)
+    c_count: In(unsigned(32))
+    c_kind: In(IndexKind)
     start: In(1)
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        address = Signal.like(self.config.address)
-        kind = self.config.kind
-        count = self.config.count
+        address = Signal.like(self.c_address)
+        kind = self.c_kind
+        count = self.c_count
 
         index_increment = Signal(3)
         index_shift = Signal(2)
@@ -110,7 +104,7 @@ class IndexGenerator(wiring.Component):
                 with m.If(self.start):
                     m.d.sync += [
                         cur_idx.eq(0),
-                        address.eq(self.config.address),
+                        address.eq(self.c_address),
                     ]
                     with m.If(count == 0):
                         m.next = "IDLE"
@@ -167,15 +161,6 @@ class IndexGenerator(wiring.Component):
         return m
 
 
-class InputTopologyProcessorConfigLayout(data.Struct):
-    """Input topology processor configuration"""
-
-    input_topology: InputTopology
-    primitive_restart_enable: unsigned(1)
-    primitive_restart_index: unsigned(32)
-    base_vertex: unsigned(32)
-
-
 class InputTopologyProcessor(wiring.Component):
     """Processes input topology description.
 
@@ -186,7 +171,10 @@ class InputTopologyProcessor(wiring.Component):
     os_index: Out(stream.Signature(index_shape))
     ready: Out(1)
 
-    config: In(InputTopologyProcessorConfigLayout)
+    c_input_topology: In(InputTopology)
+    c_primitive_restart_enable: In(unsigned(1))
+    c_primitive_restart_index: In(unsigned(32))
+    c_base_vertex: In(unsigned(32))
 
     def __init__(self):
         super().__init__()
@@ -213,7 +201,7 @@ class InputTopologyProcessor(wiring.Component):
             for i in range(1, max_amplification + 1):
                 with m.Case(i):
                     m.d.comb += self.os_index.payload.eq(
-                        to_send[i - 1] + self.config.base_vertex
+                        to_send[i - 1] + self.c_base_vertex
                     )
                     m.d.comb += self.os_index.valid.eq(1)
                     with m.If(self.os_index.ready):
@@ -225,12 +213,12 @@ class InputTopologyProcessor(wiring.Component):
             idx = self.is_index.payload
 
             with m.If(
-                self.config.primitive_restart_enable
-                & (idx == self.config.primitive_restart_index)
+                self.c_primitive_restart_enable
+                & (idx == self.c_primitive_restart_index)
             ):
                 m.d.sync += vertex_count.eq(0)  # reset on primitive restart
             with m.Else():
-                with m.Switch(self.config.input_topology):
+                with m.Switch(self.c_input_topology):
                     with m.Case(InputTopology.POINT_LIST):
                         m.d.sync += [
                             to_send[0].eq(idx),
@@ -372,9 +360,11 @@ class InputAssembly(wiring.Component):
     )
     ready: Out(1)
 
+    TexCfgArray = data.ArrayLayout(InputAssemblyAttrConfigLayout, num_textures)
+
     c_pos: In(InputAssemblyAttrConfigLayout)
     c_norm: In(InputAssemblyAttrConfigLayout)
-    c_tex: In(InputAssemblyAttrConfigLayout).array(num_textures)
+    c_tex: In(TexCfgArray)
     c_col: In(InputAssemblyAttrConfigLayout)
 
     def elaborate(self, platform) -> Module:

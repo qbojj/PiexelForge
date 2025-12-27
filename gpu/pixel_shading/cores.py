@@ -11,6 +11,7 @@ Implements the fragment pipeline with memory access:
 from amaranth import *
 from amaranth.lib import data, enum, stream, wiring
 from amaranth.lib.wiring import In, Out
+from amaranth_soc.wishbone.bus import Interface as wishbone_Interface
 from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
 
 from gpu.utils import fixed
@@ -128,6 +129,17 @@ class Texturing(wiring.Component):
 
 
 class DepthStencilTest(wiring.Component):
+    is_fragment: stream.Interface
+    os_fragment: stream.Interface
+
+    stencil_conf_front: Value
+    stencil_conf_back: Value
+
+    depth_conf: Value
+    fb_info: Value
+
+    wb_bus: wishbone_Interface
+
     def __init__(self):
         super().__init__(
             {

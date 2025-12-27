@@ -20,14 +20,10 @@ def make_test_input_topology_processor(
     t = SimpleTestbench(dut)
 
     async def init_tb(ctx):
-        await t.initialize_csrs(ctx)
-
-        ctx.set(dut.config.input_topology, input_topology)
-        ctx.set(
-            dut.config.primitive_restart_enable, 1 if restart_index is not None else 0
-        )
-        ctx.set(dut.config.primitive_restart_index, restart_index or 0)
-        ctx.set(dut.config.base_vertex, base_vertex)
+        ctx.set(dut.c_input_topology, input_topology)
+        ctx.set(dut.c_primitive_restart_enable, 1 if restart_index is not None else 0)
+        ctx.set(dut.c_primitive_restart_index, restart_index or 0)
+        ctx.set(dut.c_base_vertex, base_vertex)
 
     sim = Simulator(t)
     sim.add_clock(1e-9)

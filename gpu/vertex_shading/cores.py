@@ -3,7 +3,7 @@ from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
 
 from ..utils.layouts import PrimitiveAssemblyLayout, ShadingVertexLayout
-from ..utils.types import Vector3_mem, Vector4_mem
+from ..utils.types import FixedPoint, Vector3_mem, Vector4_mem
 
 
 class LightPropertyLayout(data.Struct):
@@ -41,13 +41,15 @@ class VertexShading(wiring.Component):
 
     Uses following wires for light properties:
     - light: array of light property structures
+
+    TODO: for now only directional lights are supported
     """
 
     is_vertex: In(stream.Signature(ShadingVertexLayout))
     os_vertex: Out(stream.Signature(PrimitiveAssemblyLayout))
 
     material: In(MaterialPropertyLayout)
-    lights: In(data.ArrayLayout(LightPropertyLayout, 1))
+    lights: In(LightPropertyLayout).array(1)
 
     ready: Out(1)
 
@@ -60,13 +62,157 @@ class VertexShading(wiring.Component):
 
         m.d.comb += self.ready.eq(~self.os_vertex.valid)
 
-        m.d.comb += [
-            self.os_vertex.p.position_proj.eq(self.is_vertex.p.position_proj),
-            self.os_vertex.p.texcoords.eq(self.is_vertex.p.texcoords),
-            self.os_vertex.p.color.eq(self.is_vertex.p.color),
-            self.os_vertex.p.color_back.eq(self.is_vertex.p.color),
-            self.os_vertex.valid.eq(self.is_vertex.valid),
-            self.is_vertex.ready.eq(self.os_vertex.ready),
-        ]
+        # Cached vertex and light data
+        n = Array(Signal(FixedPoint) for _ in range(3))
+        v_color = Array(Signal.like(self.is_vertex.p.color[i]) for i in range(4))
+        v_pos_ndc = Signal.like(self.is_vertex.p.position_proj)
+        v_texcoords = Signal.like(self.is_vertex.p.texcoords)
+
+        # Single shared multiplier
+        mul_a = Signal(FixedPoint)
+        mul_b = Signal(FixedPoint)
+        mul_result = Signal(FixedPoint)
+        m.d.comb += mul_result.eq(mul_a * mul_b)
+
+        # Accumulators for dot product and shading
+        dot_accum = Signal(FixedPoint)
+        dp_clamped = Signal(FixedPoint)
+        amb_accum = Signal(FixedPoint)
+        dif_accum = Signal(FixedPoint)
+
+        # Output color (accumulated across all lights)
+        out_color = Signal.like(self.os_vertex.p.color)
+
+        # Determine number of lights
+        num_lights = len(self.lights)
+
+        with m.If(self.os_vertex.ready):
+            m.d.sync += self.os_vertex.valid.eq(0)
+
+        with m.FSM():
+            with m.State("IDLE"):
+                m.d.comb += self.is_vertex.ready.eq(1)
+                m.d.comb += self.ready.eq(1)
+
+                with m.If(self.is_vertex.valid):
+                    # Capture input
+                    m.d.sync += [
+                        n[0].eq(self.is_vertex.p.normal_view[0]),
+                        n[1].eq(self.is_vertex.p.normal_view[1]),
+                        n[2].eq(self.is_vertex.p.normal_view[2]),
+                    ] + [v_color[i].eq(self.is_vertex.p.color[i]) for i in range(4)]
+                    m.d.sync += [
+                        v_pos_ndc.eq(self.is_vertex.p.position_proj),
+                        v_texcoords.eq(self.is_vertex.p.texcoords),
+                        out_color.eq(0),  # Initialize accumulated color
+                    ]
+                    m.d.sync += dot_accum.eq(0)
+                    m.next = "DOT_0_LIGHT_0"
+
+            # Nested loops: for each light, compute dot product and per-channel shading
+            for light_idx in range(num_lights):
+                # Dot product computation for this light (3 cycles)
+                with m.State(f"DOT_0_LIGHT_{light_idx}"):
+                    m.d.comb += [
+                        mul_a.eq(n[0]),
+                        mul_b.eq(-self.lights[light_idx].position[0]),
+                    ]
+                    m.d.sync += dot_accum.eq(mul_result)
+                    m.next = f"DOT_1_LIGHT_{light_idx}"
+
+                with m.State(f"DOT_1_LIGHT_{light_idx}"):
+                    m.d.comb += [
+                        mul_a.eq(n[1]),
+                        mul_b.eq(-self.lights[light_idx].position[1]),
+                    ]
+                    m.d.sync += dot_accum.eq(dot_accum + mul_result)
+                    m.next = f"DOT_2_LIGHT_{light_idx}"
+
+                with m.State(f"DOT_2_LIGHT_{light_idx}"):
+                    m.d.comb += [
+                        mul_a.eq(n[2]),
+                        mul_b.eq(-self.lights[light_idx].position[2]),
+                    ]
+                    m.d.sync += dot_accum.eq(dot_accum + mul_result)
+                    m.d.sync += dp_clamped.eq(
+                        Mux(dot_accum + mul_result > 0, dot_accum + mul_result, 0)
+                    )
+                    m.next = f"COLOR_AMBIENT_0_LIGHT_{light_idx}"
+
+                # Per-channel shading for this light
+                for ch_idx in range(3):
+                    next_ch = ch_idx + 1
+                    if next_ch < 3:
+                        next_state_name = f"COLOR_AMBIENT_{next_ch}_LIGHT_{light_idx}"
+                    else:
+                        # Last channel of this light
+                        if light_idx + 1 < num_lights:
+                            # Move to next light
+                            next_state_name = f"DOT_0_LIGHT_{light_idx + 1}"
+                        else:
+                            # Last light, last channel -> go to MODULATE
+                            next_state_name = "MODULATE_BY_VERTEX_COLOR_0"
+
+                    with m.State(f"COLOR_AMBIENT_{ch_idx}_LIGHT_{light_idx}"):
+                        m.d.comb += [
+                            mul_a.eq(self.material.ambient[ch_idx]),
+                            mul_b.eq(self.lights[light_idx].ambient[ch_idx]),
+                        ]
+                        m.d.sync += amb_accum.eq(mul_result)
+                        m.next = f"COLOR_DIFFUSE_{ch_idx}_LIGHT_{light_idx}"
+
+                    with m.State(f"COLOR_DIFFUSE_{ch_idx}_LIGHT_{light_idx}"):
+                        m.d.comb += [
+                            mul_a.eq(self.material.diffuse[ch_idx]),
+                            mul_b.eq(self.lights[light_idx].diffuse[ch_idx]),
+                        ]
+                        m.d.sync += dif_accum.eq(mul_result)
+                        m.next = f"COLOR_DIFFUSE_MUL_{ch_idx}_LIGHT_{light_idx}"
+
+                    with m.State(f"COLOR_DIFFUSE_MUL_{ch_idx}_LIGHT_{light_idx}"):
+                        m.d.comb += [
+                            mul_a.eq(dif_accum),
+                            mul_b.eq(dp_clamped),
+                        ]
+                        m.d.sync += dif_accum.eq(mul_result)
+                        m.next = f"COLOR_ACCUMULATE_{ch_idx}_LIGHT_{light_idx}"
+
+                    with m.State(f"COLOR_ACCUMULATE_{ch_idx}_LIGHT_{light_idx}"):
+                        # Accumulate light contribution (add to out_color)
+                        m.d.sync += out_color[ch_idx].eq(
+                            out_color[ch_idx] + amb_accum + dif_accum
+                        )
+                        m.next = next_state_name
+
+            # Final modulation by vertex color (per-channel)
+            for ch_idx in range(3):
+                next_ch = ch_idx + 1
+                next_state_name = (
+                    f"MODULATE_BY_VERTEX_COLOR_{next_ch}" if next_ch < 3 else "SEND"
+                )
+
+                with m.State(f"MODULATE_BY_VERTEX_COLOR_{ch_idx}"):
+                    m.d.comb += [
+                        mul_a.eq(v_color[ch_idx]),
+                        mul_b.eq(out_color[ch_idx]),
+                    ]
+                    m.d.sync += out_color[ch_idx].eq(
+                        mul_result.saturate(v_color[ch_idx].shape())
+                    )
+                    if ch_idx == 2:
+                        # Last channel: preserve alpha
+                        m.d.sync += out_color[3].eq(v_color[3])
+                    m.next = next_state_name
+
+            with m.State("SEND"):
+                with m.If(~self.os_vertex.valid | self.os_vertex.ready):
+                    m.d.sync += [
+                        self.os_vertex.p.position_ndc.eq(v_pos_ndc),
+                        self.os_vertex.p.texcoords.eq(v_texcoords),
+                        self.os_vertex.p.color.eq(out_color),
+                        self.os_vertex.p.color_back.eq(out_color),
+                        self.os_vertex.valid.eq(1),
+                    ]
+                    m.next = "IDLE"
 
         return m

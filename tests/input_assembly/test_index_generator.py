@@ -21,16 +21,10 @@ def make_test_index_generator(
 
     async def tb(ctx):
         await t.initialize_memory(ctx, addr, memory_data)
-        await t.initialize_csrs(ctx)
 
-        ctx.set(
-            dut.config,
-            {
-                "address": addr,
-                "count": count,
-                "kind": kind,
-            },
-        )
+        ctx.set(dut.c_address, addr)
+        ctx.set(dut.c_count, count)
+        ctx.set(dut.c_kind, kind)
 
         ctx.set(dut.start, 1)
         await ctx.tick()
