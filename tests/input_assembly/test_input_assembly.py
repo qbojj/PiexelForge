@@ -4,6 +4,7 @@ from amaranth.sim import Simulator
 
 from gpu.input_assembly.cores import InputAssembly
 from gpu.input_assembly.layouts import InputData, InputMode
+from gpu.utils.layouts import num_textures
 from gpu.utils.types import Vector4_mem
 
 from ..utils.streams import stream_testbench
@@ -44,11 +45,11 @@ def make_test_input_assembly(
         ctx.set(dut.c_norm.mode, norm_mode)
         ctx.set(dut.c_norm.info, norm_data)
 
-        ctx.set(dut.c_tex[0].mode, tex0_mode)
-        ctx.set(dut.c_tex[0].info, tex0_data)
-
-        ctx.set(dut.c_tex[1].mode, tex1_mode)
-        ctx.set(dut.c_tex[1].info, tex1_data)
+        tex_modes = [tex0_mode, tex1_mode]
+        tex_datas = [tex0_data, tex1_data]
+        for i in range(num_textures):
+            ctx.set(dut.c_tex[i].mode, tex_modes[i])
+            ctx.set(dut.c_tex[i].info, tex_datas[i])
 
         ctx.set(dut.c_col.mode, color_mode)
         ctx.set(dut.c_col.info, color_data)
@@ -84,7 +85,7 @@ def test_input_assembly_constant_only():
             {
                 "position": [0.0, 0.0, 0.0, 1.0],
                 "normal": [0.0, 0.0, 0.0],
-                "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+                "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
                 "color": [0.0, 0.0, 0.0, 1.0],
             }
             for _ in range(5)
@@ -92,41 +93,56 @@ def test_input_assembly_constant_only():
     )
 
 
+component_cases = [
+    ("test_input_assembly_continous_pos", "position", "pos", 0),
+    ("test_input_assembly_continous_norm", "normal", "norm", 0),
+    ("test_input_assembly_continous_col", "color", "color", 0),
+    ("test_input_assembly_strided_4_pos", "position", "pos", 4),
+    ("test_input_assembly_strided_8_norm", "normal", "norm", 8),
+    ("test_input_assembly_strided_20_col", "color", "color", 20),
+]
+
+if num_textures >= 1:
+    component_cases.extend(
+        [
+            ("test_input_assembly_continous_tex0", "texcoords[0]", "tex0", 0),
+            ("test_input_assembly_strided_12_tex0", "texcoords[0]", "tex0", 12),
+        ]
+    )
+
+if num_textures >= 2:
+    component_cases.extend(
+        [
+            ("test_input_assembly_continous_tex1", "texcoords[1]", "tex1", 0),
+            ("test_input_assembly_strided_16_tex1", "texcoords[1]", "tex1", 16),
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     ["test_name", "comp", "comp_in", "separation"],
-    [
-        ("test_input_assembly_continous_pos", "position", "pos", 0),
-        ("test_input_assembly_continous_norm", "normal", "norm", 0),
-        ("test_input_assembly_continous_tex0", "texcoords[0]", "tex0", 0),
-        ("test_input_assembly_continous_tex1", "texcoords[1]", "tex1", 0),
-        ("test_input_assembly_continous_col", "color", "color", 0),
-        ("test_input_assembly_strided_4_pos", "position", "pos", 4),
-        ("test_input_assembly_strided_8_norm", "normal", "norm", 8),
-        ("test_input_assembly_strided_12_tex0", "texcoords[0]", "tex0", 12),
-        ("test_input_assembly_strided_16_tex1", "texcoords[1]", "tex1", 16),
-        ("test_input_assembly_strided_20_col", "color", "color", 20),
-    ],
+    component_cases,
 )
 def test_input_assembly_single_component(test_name, comp, comp_in, separation):
     expected = [
         {
             "position": [0.0, 0.0, 0.0, 1.0],
             "normal": [0.0, 0.0, 0.0],
-            "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+            "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
             "color": [0.0, 0.0, 0.0, 1.0],
         },
         {
             "position": [0.0, 0.0, 0.0, 1.0],
             "normal": [0.0, 0.0, 0.0],
-            "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+            "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
             "color": [0.0, 0.0, 0.0, 1.0],
         },
     ]
 
-    if comp == "texcoords[0]":
+    if comp == "texcoords[0]" and num_textures >= 1:
         expected[0]["texcoords"][0] = [1.0, 2.0, 3.0, 4.0]
         expected[1]["texcoords"][0] = [5.0, 6.0, 7.0, 8.0]
-    elif comp == "texcoords[1]":
+    elif comp == "texcoords[1]" and num_textures >= 2:
         expected[0]["texcoords"][1] = [1.0, 2.0, 3.0, 4.0]
         expected[1]["texcoords"][1] = [5.0, 6.0, 7.0, 8.0]
     elif comp == "normal":

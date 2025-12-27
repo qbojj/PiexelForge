@@ -12,7 +12,7 @@ from gpu.pixel_shading import (
     StencilOp,
     SwapchainOutput,
 )
-from gpu.utils.layouts import FragmentLayout
+from gpu.utils.layouts import FragmentLayout, num_textures
 from gpu.utils.types import CompareOp
 
 from ..utils.streams import stream_testbench
@@ -22,7 +22,7 @@ from ..utils.testbench import SimpleTestbench
 def make_fragment(x, y, depth, color, front_facing=1):
     return {
         "depth": depth,
-        "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+        "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
         "color": color,
         "coord_pos": [x, y],
         "front_facing": front_facing,

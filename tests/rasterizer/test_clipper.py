@@ -3,6 +3,7 @@ from amaranth import *
 from amaranth.sim import Simulator
 
 from gpu.rasterizer.cores import PrimitiveClipper
+from gpu.utils.layouts import num_textures
 from gpu.utils.types import PrimitiveType
 
 from ..utils.streams import stream_testbench
@@ -12,10 +13,7 @@ def make_vertex(x, y, z, w=1.0, r=1.0, g=1.0, b=1.0, a=1.0):
     """Helper to create a vertex with NDC position and color."""
     return {
         "position_ndc": [x, y, z, w],
-        "texcoords": [
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ],
+        "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
         "color": [r, g, b, a],
         "front_facing": 1,
     }

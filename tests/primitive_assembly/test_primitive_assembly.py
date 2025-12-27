@@ -3,6 +3,7 @@ from amaranth.sim import Simulator
 
 from gpu.primitive_assembly.cores import PrimitiveAssembly
 from gpu.utils import fixed
+from gpu.utils.layouts import num_textures
 from gpu.utils.types import CullFace, FixedPoint, FrontFace, PrimitiveType
 
 from ..utils.streams import stream_testbench
@@ -12,7 +13,7 @@ from ..utils.testbench import SimpleTestbench
 def make_pa_vertex(pos, color, color_back=None):
     return {
         "position_ndc": pos,
-        "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+        "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
         "color": color,
         "color_back": color_back if color_back is not None else color,
     }

@@ -4,6 +4,7 @@ from amaranth import *
 from amaranth.sim import Simulator
 from numpy.linalg import inv
 
+from gpu.utils.layouts import num_textures
 from gpu.vertex_transform.cores import VertexTransform
 
 from ..utils.streams import stream_testbench
@@ -18,10 +19,7 @@ def make_vertex():
     return {
         "position": [1.0, -2.0, 3.0, 1.0],
         "normal": [0.0, 0.0, 1.0],
-        "texcoords": [
-            [0.1, 0.2, 0.3, 1.0],
-            [0.4, 0.5, 0.6, 1.0],
-        ],
+        "texcoords": [[0.1, 0.2, 0.3, 1.0] for _ in range(num_textures)],
         "color": [0.25, 0.5, 0.75, 1.0],
     }
 
@@ -44,11 +42,11 @@ def test_identity_transform_positions():
 
         # Disable normal and texture transforms
         ctx.set(dut.enabled.normal, 0)
-        for i in range(2):
+        for i in range(num_textures):
             ctx.set(dut.enabled.texture[i], 0)
 
         # Set texture transforms to identity
-        for i in range(2):
+        for i in range(num_textures):
             ctx.set(dut.texture_transforms[i], identity_mat(4).flatten().tolist())
 
     async def output_checker(ctx, results):
@@ -63,7 +61,7 @@ def test_identity_transform_positions():
 
         # Disabled normal/tex transforms should zero normals and leave texcoords as identity defaults (0,0,0,1)
         assert vec_to_list(out.normal_view) == pytest.approx([0.0, 0.0, 0.0])
-        for tex_idx in range(2):
+        for tex_idx in range(num_textures):
             assert vec_to_list(out.texcoords[tex_idx]) == pytest.approx(
                 [0.0, 0.0, 0.0, 1.0]
             )

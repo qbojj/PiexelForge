@@ -2,6 +2,7 @@ import pytest
 from amaranth.sim import Simulator
 
 from gpu.rasterizer.rasterizer import TriangleRasterizer
+from gpu.utils.layouts import num_textures
 
 from ..utils.streams import stream_testbench
 from ..utils.testbench import SimpleTestbench
@@ -12,7 +13,7 @@ def make_pa_vertex(pos, color):
     """Create a primitive assembly vertex (output of PrimitiveAssembly)"""
     return {
         "position_ndc": pos,
-        "texcoords": [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]],
+        "texcoords": [[0.0, 0.0, 0.0, 1.0] for _ in range(num_textures)],
         "color": color,
         "front_facing": 1,
     }

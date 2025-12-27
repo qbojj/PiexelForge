@@ -6,7 +6,7 @@ from gpu.utils.stream import WideStreamOutput
 
 from ..utils import math as gpu_math
 from ..utils.fixed import Value
-from ..utils.layouts import RasterizerLayout
+from ..utils.layouts import RasterizerLayout, num_textures
 from ..utils.types import FixedPoint, PrimitiveType
 
 
@@ -430,7 +430,7 @@ class PrimitiveClipper(wiring.Component):
                     )
                 for i in range(4):
                     m.d.sync += clip_buf[dst][out_count].color[i].eq(col[i])
-                for ti in range(2):
+                for ti in range(num_textures):
                     tex = lerp_a(curr_v.texcoords[ti], next_v.texcoords[ti], t, 4)
                     for i in range(4):
                         m.d.sync += clip_buf[dst][out_count].texcoords[ti][i].eq(tex[i])

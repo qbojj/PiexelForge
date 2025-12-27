@@ -10,7 +10,7 @@ from .types import (
     texture_coord_shape,
 )
 
-num_textures = 2
+num_textures = 0
 texture_coords = data.ArrayLayout(Vector4, num_textures)
 texture_position = data.ArrayLayout(texture_coord_shape, 2)
 
