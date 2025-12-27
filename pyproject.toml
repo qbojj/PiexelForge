@@ -52,8 +52,4 @@ pythonpath = [
 ]
 addopts = [
   "-n", "logical",
-  "-m", "not slow"
-]
-markers = [
-    "slow: long-running tests",
 ]

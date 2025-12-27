@@ -196,6 +196,9 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
     )
 
     sim.run()
+
+
+def test_triangle_front_facing():
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
