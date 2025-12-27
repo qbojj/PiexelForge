@@ -1,10 +1,17 @@
 from amaranth import *
-from amaranth.lib import stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
-from amaranth_soc import csr
 
 from ..utils.layouts import PrimitiveAssemblyLayout, RasterizerLayout
 from ..utils.types import CullFace, FixedPoint, FrontFace, PrimitiveType
+
+
+class PrimitiveAssemblyConfigLayout(data.Struct):
+    """Primitive assembly configuration"""
+
+    type: PrimitiveType
+    cull: CullFace
+    winding: FrontFace
 
 
 class PrimitiveAssembly(wiring.Component):
@@ -16,43 +23,17 @@ class PrimitiveAssembly(wiring.Component):
     Output: RasterizerLayout
     """
 
-    class PrimitiveReg(csr.Register, access="rw"):
-        type: csr.Field(csr.action.RW, PrimitiveType)
+    is_vertex: In(stream.Signature(PrimitiveAssemblyLayout))
+    os_primitive: Out(stream.Signature(RasterizerLayout))
+    ready: Out(1)
 
-    class PrimitiveCullReg(csr.Register, access="rw"):
-        cull: csr.Field(csr.action.RW, CullFace)
-
-    class PrimitiveWindingReg(csr.Register, access="rw"):
-        winding: csr.Field(csr.action.RW, FrontFace)
+    config: In(PrimitiveAssemblyConfigLayout)
 
     def __init__(self):
-        regs = csr.Builder(addr_width=8, data_width=8)
-        self.prim_type = regs.add(
-            name="prim_type", reg=self.PrimitiveReg(), offset=0x00
-        )
-        self.prim_cull = regs.add(
-            name="prim_cull", reg=self.PrimitiveCullReg(), offset=0x04
-        )
-        self.prim_winding = regs.add(
-            name="prim_winding", reg=self.PrimitiveWindingReg(), offset=0x08
-        )
-        self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        super().__init__(
-            {
-                "is_vertex": In(stream.Signature(PrimitiveAssemblyLayout)),
-                "os_primitive": Out(stream.Signature(RasterizerLayout)),
-                "ready": Out(1),
-                "csr_bus": Out(self.csr_bridge.bus.signature),
-            }
-        )
-        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
+        super().__init__()
 
     def elaborate(self, platform):
         m = Module()
-
-        m.submodules.csr_bridge = self.csr_bridge
-
-        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         # Advertise readiness to upstream; simple reflection of output backpressure.
         m.d.comb += self.ready.eq(~self.os_primitive.valid)
@@ -60,7 +41,7 @@ class PrimitiveAssembly(wiring.Component):
         with m.If(self.os_primitive.ready):
             m.d.sync += self.os_primitive.valid.eq(0)
 
-        with m.Switch(self.prim_type.f.type.data):
+        with m.Switch(self.config.type):
             with m.Case(PrimitiveType.POINTS, PrimitiveType.LINES):
                 # Simple pass-through for points and lines
                 with m.If(
@@ -138,7 +119,7 @@ class PrimitiveAssembly(wiring.Component):
                         ]
 
                         ff = Signal()
-                        with m.Switch(self.prim_winding.f.winding.data):
+                        with m.Switch(self.config.winding):
                             with m.Case(FrontFace.CCW):
                                 m.d.comb += ff.eq(area > 0)
                             with m.Case(FrontFace.CW):
@@ -156,12 +137,12 @@ class PrimitiveAssembly(wiring.Component):
                                 "Area: {}, Front Facing: {}, prim_wind: {}, cull: {}",
                                 area,
                                 ff,
-                                self.prim_winding.f.winding.data,
-                                self.prim_cull.f.cull.data,
+                                self.config.winding,
+                                self.config.cull,
                             )
                         )
 
-                        cull_v = self.prim_cull.f.cull.data.as_value()
+                        cull_v = self.config.cull.as_value()
 
                         with m.If(ff & ((cull_v & CullFace.FRONT.value) != 0)):
                             m.d.sync += Print("Culling front face")

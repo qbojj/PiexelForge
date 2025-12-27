@@ -1,7 +1,6 @@
 from amaranth import *
 from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
-from amaranth_soc import csr
 
 from gpu.utils.math import FixedPointInv, SimpleOpModule
 from gpu.utils.stream import StreamToVector, VectorToStream
@@ -14,6 +13,13 @@ from ..utils.layouts import (
 from ..utils.types import FixedPoint, FixedPoint_mem, Vector3
 
 
+class VertexTransformEnablementLayout(data.Struct):
+    """Enablement configuration for vertex transform"""
+
+    normal: 1
+    texture: data.ArrayLayout(1, num_textures)
+
+
 class VertexTransform(wiring.Component):
     """Vertex transformation core
 
@@ -23,7 +29,7 @@ class VertexTransform(wiring.Component):
     Input: VertexLayout
     Output: ShadingVertexLayout
 
-    Uses following registers for collumn-major transformation matrices:
+    Uses following wires for column-major transformation matrices:
     - position_mv: Model-View matrix (4x4)
     - position_p: Projection matrix (4x4)
     - normal_mv_inv_t: Inverse transpose of Model-View matrix (3x3)
@@ -35,66 +41,21 @@ class VertexTransform(wiring.Component):
     is_vertex: In(stream.Signature(VertexLayout))
     os_vertex: Out(stream.Signature(ShadingVertexLayout))
 
+    enabled: In(VertexTransformEnablementLayout)
+    position_mv: In(data.ArrayLayout(FixedPoint_mem, 16))
+    position_p: In(data.ArrayLayout(FixedPoint_mem, 16))
+    normal_mv_inv_t: In(data.ArrayLayout(FixedPoint_mem, 9))
+    texture_transforms: In(
+        data.ArrayLayout(data.ArrayLayout(FixedPoint_mem, 16), num_textures)
+    )
+
     ready: Out(1)
-
-    class MatrixReg(csr.Register, access="rw"):
-        def __init__(self, size=16, init=None):
-            if init is None:
-                # identity matrix
-                match size:
-                    case 9:
-                        init = [1.0 if i % 4 == 0 else 0.0 for i in range(9)]
-                    case 16:
-                        init = [1.0 if i % 5 == 0 else 0.0 for i in range(16)]
-                    case _:
-                        init = [0.0 for _ in range(size)]
-
-            super().__init__(
-                csr.Field(
-                    csr.action.RW, data.ArrayLayout(FixedPoint_mem, size), init=init
-                )
-            )
-
-    class EnablementReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(
-                {
-                    "normal": csr.Field(csr.action.RW, 1),
-                }
-                | {
-                    f"texture_{i}": csr.Field(csr.action.RW, 1)
-                    for i in range(num_textures)
-                }
-            )
 
     def __init__(self):
         super().__init__()
-        regs = csr.Builder(addr_width=10, data_width=8)
-
-        self.enabled = regs.add("enable", self.EnablementReg())
-
-        with regs.Cluster("position"):
-            self.position_mv = regs.add("MV", self.MatrixReg(16))
-            self.position_p = regs.add("P", self.MatrixReg(16))
-
-        with regs.Cluster("normal"):
-            self.normal_mv_inv_t = regs.add("MV_inv_t", self.MatrixReg(9))
-            self.texture_transforms = []
-
-        with regs.Cluster("textures"):
-            for i in range(num_textures):
-                with regs.Cluster(str(i)):  # TODO: Change to regs.Index(i):
-                    self.texture_transforms.append(
-                        regs.add("texture_transform", self.MatrixReg(16))
-                    )
-
-        self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        self.csr_bus = self.csr_bridge.bus
 
     def elaborate(self, platform) -> Module:
         m = Module()
-
-        m.submodules += [self.csr_bridge]
 
         i_data = Signal.like(self.is_vertex.payload)
         o_data = Signal.like(self.os_vertex.payload)
@@ -109,7 +70,7 @@ class VertexTransform(wiring.Component):
             {
                 "name": "POSITION_MV",
                 "result": o_data.position_view,
-                "matrix": self.position_mv.f.data,
+                "matrix": self.position_mv,
                 "vector": i_data.position,
                 "enabled": C(1),
                 "dim": 4,
@@ -117,7 +78,7 @@ class VertexTransform(wiring.Component):
             {
                 "name": "POSITION_P",
                 "result": o_data.position_proj,
-                "matrix": self.position_p.f.data,
+                "matrix": self.position_p,
                 "vector": o_data.position_view,
                 "enabled": C(1),
                 "dim": 4,
@@ -125,18 +86,18 @@ class VertexTransform(wiring.Component):
             {
                 "name": "NORMAL",
                 "result": o_data.normal_view,
-                "matrix": self.normal_mv_inv_t.f.data,
+                "matrix": self.normal_mv_inv_t,
                 "vector": i_data.normal,
-                "enabled": self.enabled.f.normal.data,
+                "enabled": self.enabled.normal,
                 "dim": 3,
             },
         ] + [
             {
                 "name": f"TEXTURE_{i}",
                 "result": o_data.texcoords[i],
-                "matrix": self.texture_transforms[i].f.data,
+                "matrix": self.texture_transforms[i],
                 "vector": i_data.texcoords[i],
-                "enabled": self.enabled.f[f"texture_{i}"].data,
+                "enabled": self.enabled.texture[i],
                 "dim": 4,
             }
             for i in range(num_textures)

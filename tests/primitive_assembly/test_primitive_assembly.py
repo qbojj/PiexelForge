@@ -44,21 +44,16 @@ def test_points_passthrough_hypothesis(pos, color):
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.POINTS),
-            ((("prim_cull",),), CullFace.NONE),
-            ((("prim_winding",),), FrontFace.CCW),
-        ],
-        "dut",
-    )
-
     vertices = [
         make_pa_vertex(pos[i : i + 4], color[i : i + 4]) for i in range(0, len(pos), 4)
     ]
 
     print("Testing points passthrough with vertices:", vertices)
+
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.POINTS)
+        ctx.set(dut.config.cull, CullFace.NONE)
+        ctx.set(dut.config.winding, FrontFace.CCW)
 
     async def checker(ctx, results):
         assert len(results) == len(vertices)
@@ -71,7 +66,7 @@ def test_points_passthrough_hypothesis(pos, color):
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=vertices,
         output_stream=dut.os_primitive,
@@ -86,20 +81,15 @@ def test_lines_passthrough():
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.LINES),
-            ((("prim_cull",),), CullFace.NONE),
-            ((("prim_winding",),), FrontFace.CCW),
-        ],
-        "dut",
-    )
-
     line = [
         make_pa_vertex([0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0]),
         make_pa_vertex([0.5, -0.5, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]),
     ]
+
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.LINES)
+        ctx.set(dut.config.cull, CullFace.NONE)
+        ctx.set(dut.config.winding, FrontFace.CCW)
 
     async def checker(ctx, results):
         assert len(results) == 2
@@ -114,7 +104,7 @@ def test_lines_passthrough():
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=line,
         output_stream=dut.os_primitive,
@@ -166,16 +156,6 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.TRIANGLES),
-            ((("prim_cull",),), cull_face),
-            ((("prim_winding",),), front_face),
-        ],
-        "dut",
-    )
-
     ff_expected = winding_order == front_face
     cols = ["color" if ff_expected else "color_back"] * 3
 
@@ -183,6 +163,11 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
         should_be_culled = bool(cull_face & CullFace.FRONT)
     else:
         should_be_culled = bool(cull_face & CullFace.BACK)
+
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.TRIANGLES)
+        ctx.set(dut.config.cull, cull_face)
+        ctx.set(dut.config.winding, front_face)
 
     async def checker(ctx, results):
         if should_be_culled:
@@ -202,7 +187,7 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=tri,
         output_stream=dut.os_primitive,
@@ -213,16 +198,6 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
     sim.run()
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
-
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.TRIANGLES),
-            ((("prim_cull",),), CullFace.NONE),
-            ((("prim_winding",),), FrontFace.CCW),
-        ],
-        "dut",
-    )
 
     # CCW winding => front-facing with default FrontFace.CCW
     tri = [
@@ -237,6 +212,11 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
         ),
     ]
 
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.TRIANGLES)
+        ctx.set(dut.config.cull, CullFace.NONE)
+        ctx.set(dut.config.winding, FrontFace.CCW)
+
     async def checker(ctx, results):
         assert len(results) == 3
         assert_rasterizer_vertex(results[0], tri[0]["position_ndc"], tri[0]["color"], 1)
@@ -247,7 +227,7 @@ def test_triangles_winding_and_front_face(tri, winding_order, front_face, cull_f
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=tri,
         output_stream=dut.os_primitive,
@@ -275,15 +255,10 @@ def test_triangle_back_face_culled():
         ),
     ]
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.TRIANGLES),
-            ((("prim_cull",),), CullFace.BACK),
-            ((("prim_winding",),), FrontFace.CCW),
-        ],
-        "dut",
-    )
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.TRIANGLES)
+        ctx.set(dut.config.cull, CullFace.BACK)
+        ctx.set(dut.config.winding, FrontFace.CCW)
 
     async def checker(ctx, results):
         # Back-face culled => no output
@@ -293,7 +268,7 @@ def test_triangle_back_face_culled():
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=tri,
         output_stream=dut.os_primitive,
@@ -308,16 +283,6 @@ def test_triangle_back_face_uses_back_color():
     dut = PrimitiveAssembly()
     t = SimpleTestbench(dut)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("prim_type",),), PrimitiveType.TRIANGLES),
-            ((("prim_cull",),), CullFace.NONE),
-            ((("prim_winding",),), FrontFace.CCW),
-        ],
-        "dut",
-    )
-
     tri = [
         make_pa_vertex(
             [0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0]
@@ -329,6 +294,11 @@ def test_triangle_back_face_uses_back_color():
             [1.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.5, 1.0], [0.0, 0.5, 1.0, 1.0]
         ),
     ]
+
+    async def init_proc(ctx):
+        ctx.set(dut.config.type, PrimitiveType.TRIANGLES)
+        ctx.set(dut.config.cull, CullFace.NONE)
+        ctx.set(dut.config.winding, FrontFace.CCW)
 
     async def checker(ctx, results):
         assert len(results) == 3
@@ -346,7 +316,7 @@ def test_triangle_back_face_uses_back_color():
     sim.add_clock(1e-6)
     stream_testbench(
         sim,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         input_stream=dut.is_vertex,
         input_data=tri,
         output_stream=dut.os_primitive,

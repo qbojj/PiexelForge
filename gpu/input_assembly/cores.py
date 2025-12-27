@@ -1,10 +1,9 @@
 from dataclasses import dataclass
 
 from amaranth import *
-from amaranth.lib import stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
 from amaranth.utils import exact_log2
-from amaranth_soc import csr
 from amaranth_soc.wishbone.bus import Signature as wishbone_Signature
 from transactron import *
 from transactron.lib import *
@@ -31,6 +30,14 @@ __all__ = [
 ]
 
 
+class IndexGeneratorConfigLayout(data.Struct):
+    """Index generator configuration"""
+
+    address: address_shape
+    count: unsigned(32)
+    kind: IndexKind
+
+
 class IndexGenerator(wiring.Component):
     """Generates index stream based on index stream description register.
 
@@ -39,56 +46,21 @@ class IndexGenerator(wiring.Component):
     TODO: add memory burst support
     """
 
-    class StartReg(csr.Register, access="w"):
-        def __init__(self):
-            super().__init__(csr.Field(csr.action.W, unsigned(1)))
+    os_index: Out(stream.Signature(index_shape))
+    bus: Out(
+        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
+    )
+    ready: Out(1)
 
-    class AddressReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(csr.Field(csr.action.RW, address_shape))
-
-    class CountReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(csr.Field(csr.action.RW, unsigned(32)))
-
-    class KindReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(csr.Field(csr.action.RW, IndexKind))
-
-    def __init__(self):
-        regs = csr.Builder(addr_width=8, data_width=8)
-        self.start = regs.add("start", self.StartReg(), offset=0x00)
-
-        self.address = regs.add("address", self.AddressReg(), offset=0x04)
-        self.count = regs.add("count", self.CountReg(), offset=0x08)
-        self.kind = regs.add("kind", self.KindReg(), offset=0x10)
-        self.csr_bridge = csr.Bridge(regs.as_memory_map())
-
-        super().__init__(
-            {
-                "os_index": Out(stream.Signature(index_shape)),
-                "bus": Out(
-                    wishbone_Signature(
-                        addr_width=wb_bus_addr_width, data_width=wb_bus_data_width
-                    )
-                ),
-                "ready": Out(1),
-                "csr_bus": Out(self.csr_bridge.bus.signature),
-            }
-        )
-
-        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
+    config: In(IndexGeneratorConfigLayout)
+    start: In(1)
 
     def elaborate(self, platform) -> Module:
         m = Module()
 
-        m.submodules += [self.csr_bridge]
-
-        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
-
-        address = Signal.like(self.address.f.data)
-        kind = self.kind.f.data
-        count = self.count.f.data
+        address = Signal.like(self.config.address)
+        kind = self.config.kind
+        count = self.config.count
 
         index_increment = Signal(3)
         index_shift = Signal(2)
@@ -135,10 +107,10 @@ class IndexGenerator(wiring.Component):
         with m.FSM():
             with m.State("IDLE"):
                 m.d.comb += self.ready.eq(~self.os_index.valid)
-                with m.If(self.start.f.w_data & self.start.f.w_stb):
+                with m.If(self.start):
                     m.d.sync += [
                         cur_idx.eq(0),
-                        address.eq(self.address.f.data),
+                        address.eq(self.config.address),
                     ]
                     with m.If(count == 0):
                         m.next = "IDLE"
@@ -195,53 +167,32 @@ class IndexGenerator(wiring.Component):
         return m
 
 
+class InputTopologyProcessorConfigLayout(data.Struct):
+    """Input topology processor configuration"""
+
+    input_topology: InputTopology
+    primitive_restart_enable: unsigned(1)
+    primitive_restart_index: unsigned(32)
+    base_vertex: unsigned(32)
+
+
 class InputTopologyProcessor(wiring.Component):
     """Processes input topology description.
 
     Gets input index stream and outputs vertex index stream based on input topology.
     """
 
+    is_index: In(stream.Signature(index_shape))
+    os_index: Out(stream.Signature(index_shape))
+    ready: Out(1)
+
+    config: In(InputTopologyProcessorConfigLayout)
+
     def __init__(self):
-        regs = csr.Builder(addr_width=4, data_width=8)
-
-        self.input_topology = regs.add(
-            "input_topology",
-            csr.Register(csr.Field(csr.action.RW, InputTopology), access="rw"),
-            offset=0x00,
-        )
-        self.primitive_restart_enable = regs.add(
-            "primitive_restart_enable",
-            csr.Register(csr.Field(csr.action.RW, unsigned(1)), access="rw"),
-            offset=0x04,
-        )
-        self.primitive_restart_index = regs.add(
-            "primitive_restart_index",
-            csr.Register(csr.Field(csr.action.RW, unsigned(32)), access="rw"),
-            offset=0x08,
-        )
-        self.base_vertex = regs.add(
-            "base_vertex",
-            csr.Register(csr.Field(csr.action.RW, unsigned(32)), access="rw"),
-            offset=0x0C,
-        )
-
-        self.csr_bridge = csr.Bridge(regs.as_memory_map())
-        super().__init__(
-            {
-                "is_index": In(stream.Signature(index_shape)),
-                "os_index": Out(stream.Signature(index_shape)),
-                "ready": Out(1),
-                "csr_bus": Out(self.csr_bridge.bus.signature),
-            }
-        )
-
-        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
+        super().__init__()
 
     def elaborate(self, platform) -> Module:
         m = Module()
-
-        m.submodules += [self.csr_bridge]
-        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         # values for triangle strips/fans and line strips
         v1 = Signal(index_shape)
@@ -262,7 +213,7 @@ class InputTopologyProcessor(wiring.Component):
             for i in range(1, max_amplification + 1):
                 with m.Case(i):
                     m.d.comb += self.os_index.payload.eq(
-                        to_send[i - 1] + self.base_vertex.f.data
+                        to_send[i - 1] + self.config.base_vertex
                     )
                     m.d.comb += self.os_index.valid.eq(1)
                     with m.If(self.os_index.ready):
@@ -274,12 +225,12 @@ class InputTopologyProcessor(wiring.Component):
             idx = self.is_index.payload
 
             with m.If(
-                self.primitive_restart_enable.f.data
-                & (idx == self.primitive_restart_index.f.data)
+                self.config.primitive_restart_enable
+                & (idx == self.config.primitive_restart_index)
             ):
                 m.d.sync += vertex_count.eq(0)  # reset on primitive restart
             with m.Else():
-                with m.Switch(self.input_topology.f.data):
+                with m.Switch(self.config.input_topology):
                     with m.Case(InputTopology.POINT_LIST):
                         m.d.sync += [
                             to_send[0].eq(idx),
@@ -395,93 +346,55 @@ class InputTopologyProcessor(wiring.Component):
         return m
 
 
+class InputAssemblyAttrConfigLayout(data.Struct):
+    """Single vertex attribute configuration"""
+
+    mode: InputMode
+    info: InputData
+
+
+class InputAssemblyConfigLayout(data.Struct):
+    """Input assembly configuration for all attributes"""
+
+    position: InputAssemblyAttrConfigLayout
+    normal: InputAssemblyAttrConfigLayout
+    texcoords: data.ArrayLayout(InputAssemblyAttrConfigLayout, num_textures)
+    color: InputAssemblyAttrConfigLayout
+
+
 class InputAssembly(wiring.Component):
     """Input Assembly stage.
 
     Gets index stream and outputs vertex attribute stream.
 
-    Also exposes following registers:
-    - vertex_input_attributes: VertexInputAttributes - information about vertex attributes
+    Takes configuration for vertex attributes including position, normal, texcoords, and color.
+    Each attribute can be constant or per-vertex.
 
     TODO: support other formats than Fixed 16.16
     TODO: add memory burst support
     """
 
-    class InputModeReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(csr.Field(csr.action.RW, InputMode))
+    is_index: In(stream.Signature(index_shape))
+    os_vertex: Out(stream.Signature(VertexLayout))
+    bus: Out(
+        wishbone_Signature(addr_width=wb_bus_addr_width, data_width=wb_bus_data_width)
+    )
+    ready: Out(1)
 
-    class InputDataReg(csr.Register, access="rw"):
-        def __init__(self):
-            super().__init__(
-                csr.Field(
-                    csr.action.RW,
-                    InputData,
-                    init={
-                        "constant_value": [0.0, 0.0, 0.0, 1.0],
-                    },
-                )
-            )
-
-    @dataclass
-    class RegSet:
-        mode: "InputAssembly.InputModeReg"
-        info: "InputAssembly.InputDataReg"
+    config: In(InputAssemblyConfigLayout)
 
     def __init__(self):
-        regs = csr.Builder(addr_width=8, data_width=8)
-
-        def make_reg_set(base):
-            return self.RegSet(
-                mode=regs.add("mode", self.InputModeReg(), offset=base + 0),
-                info=regs.add("data", self.InputDataReg(), offset=base + 0x10),
-            )
-
-        with regs.Cluster("position"):
-            self.position = make_reg_set(0x00)
-
-        with regs.Cluster("normal"):
-            self.normal = make_reg_set(0x20)
-
-        self.tex = []
-        with regs.Cluster("texcoords"):
-            for i in range(num_textures):
-                with regs.Cluster(str(i)):  # TODO: change to regs.Index
-                    self.tex.append(make_reg_set(0x40 + i * 0x20))
-
-        with regs.Cluster("color"):
-            self.color = make_reg_set(0x40 + num_textures * 0x20)
-
-        self.csr_bridge = csr.Bridge(regs.as_memory_map())
-
-        super().__init__(
-            {
-                "is_index": In(stream.Signature(index_shape)),
-                "os_vertex": Out(stream.Signature(VertexLayout)),
-                "bus": Out(
-                    wishbone_Signature(
-                        addr_width=wb_bus_addr_width, data_width=wb_bus_data_width
-                    )
-                ),
-                "csr_bus": Out(self.csr_bridge.bus.signature),
-                "ready": Out(1),
-            }
-        )
-
-        self.csr_bus.memory_map = self.csr_bridge.bus.memory_map
+        super().__init__()
 
     def elaborate(self, platform) -> Module:
         m = Module()
-
-        m.submodules += [self.csr_bridge]
-        wiring.connect(m, wiring.flipped(self.csr_bus), self.csr_bridge.bus)
 
         # fetch vertex at given index based on vertex input attributes
 
         idx = Signal.like(self.is_index.payload)
         vtx = Signal.like(self.os_vertex.payload)
 
-        addr = Signal.like(self.position.info.f.data.per_vertex.address)
+        addr = Signal.like(self.config.position.info.per_vertex.address)
 
         output_next_free = ~self.os_vertex.valid | self.os_vertex.ready
 
@@ -490,7 +403,7 @@ class InputAssembly(wiring.Component):
 
         @dataclass
         class AttrInfo:
-            desc: "InputAssembly.RegSet"
+            config: InputAssemblyAttrConfigLayout
             data_v: Signal
 
             @property
@@ -500,22 +413,22 @@ class InputAssembly(wiring.Component):
         attr_info = Array(
             [
                 AttrInfo(
-                    desc=self.position,
+                    config=self.config.position,
                     data_v=vtx.position,
                 ),
                 AttrInfo(
-                    desc=self.normal,
+                    config=self.config.normal,
                     data_v=vtx.normal,
                 ),
                 *[
                     AttrInfo(
-                        desc=self.tex[i],
+                        config=self.config.texcoords[i],
                         data_v=vtx.texcoords[i],
                     )
                     for i in range(num_textures)
                 ],
                 AttrInfo(
-                    desc=self.color,
+                    config=self.config.color,
                     data_v=vtx.color,
                 ),
             ]
@@ -535,19 +448,19 @@ class InputAssembly(wiring.Component):
             for attr_no, attr in enumerate(attr_info):
                 base_name = f"FETCH_ATTR_{attr_no}"
                 with m.State(f"{base_name}_START"):
-                    desc = attr.desc
-                    with m.Switch(desc.mode.f.data):
+                    config = attr.config
+                    with m.Switch(config.mode):
                         with m.Case(InputMode.CONSTANT):
                             # constant value
                             m.d.sync += [
-                                attr.data_v[i].eq(desc.info.f.data.constant_value[i])
+                                attr.data_v[i].eq(config.info.constant_value[i])
                                 for i in range(attr.components)
                             ]
                             m.next = f"{base_name}_DONE"
                         with m.Case(InputMode.PER_VERTEX):
                             # per-vertex attribute
-                            base_addr = desc.info.f.data.per_vertex.address
-                            stride = desc.info.f.data.per_vertex.stride
+                            base_addr = config.info.per_vertex.address
+                            stride = config.info.per_vertex.stride
                             m.d.sync += addr.eq(base_addr + idx * stride)
                             m.next = f"{base_name}_MEM_READ_COMPONENT_0"
                         with m.Default():

@@ -17,22 +17,24 @@ def make_test_index_generator(
     dut = IndexGenerator()
     t = SimpleTestbench(dut, mem_addr=0x80000000, mem_size=1024)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            (("address",), C(addr, 32)),
-            (("count",), C(count, 32)),
-            (("kind",), kind),
-            (("start",), 1),
-        ],
-        "index_gen",
-    )
-
     t.arbiter.add(dut.bus)
 
     async def tb(ctx):
         await t.initialize_memory(ctx, addr, memory_data)
         await t.initialize_csrs(ctx)
+
+        ctx.set(
+            dut.config,
+            {
+                "address": addr,
+                "count": count,
+                "kind": kind,
+            },
+        )
+
+        ctx.set(dut.start, 1)
+        await ctx.tick()
+        ctx.set(dut.start, 0)
 
     sim = Simulator(t)
     sim.add_clock(1e-9)
@@ -73,9 +75,6 @@ def test_indexed_u32():
         memory_data=b"".join((i.to_bytes(4, "little") for i in [0, 2, 4, 1, 5])),
         expected=[0, 2, 4, 1, 5],
     )
-
-
-test_indexed_u32()
 
 
 def test_indexed_u16():

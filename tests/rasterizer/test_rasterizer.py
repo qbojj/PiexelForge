@@ -18,6 +18,7 @@ def make_pa_vertex(pos, color):
     }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("persp", [True, False])
 def test_rasterizer_single_triangle(persp: bool):
     """Test rasterizing a single triangle"""
@@ -126,6 +127,7 @@ def test_rasterizer_single_triangle(persp: bool):
     print("Rasterization statistics:", stats)
 
 
+@pytest.mark.slow
 def test_rasterizer_two_triangles():
     """Test rasterizing two triangles with different colors"""
     dut = TriangleRasterizer()
@@ -235,6 +237,7 @@ def test_rasterizer_two_triangles():
     print("Rasterization statistics:", stats)
 
 
+@pytest.mark.slow
 def test_rasterizer_depth_interpolation():
     """Test that depth is correctly interpolated"""
     dut = TriangleRasterizer()
@@ -326,6 +329,7 @@ def test_rasterizer_depth_interpolation():
     print("Rasterization statistics:", stats)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("alpha", [True, False])
 def test_rasterizer_two_overlapping_triangles(alpha: bool):
     """Test rasterizing two overlapping triangles to check fragment generation"""

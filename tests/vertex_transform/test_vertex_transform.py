@@ -4,7 +4,6 @@ from amaranth import *
 from amaranth.sim import Simulator
 from numpy.linalg import inv
 
-from gpu.utils.types import FixedPoint_mem
 from gpu.vertex_transform.cores import VertexTransform
 
 from ..utils.streams import stream_testbench
@@ -35,21 +34,22 @@ def test_identity_transform_positions():
     proj = identity_mat(4)
     vertex = make_vertex()
 
-    mv_inv_t = inv(mv).T
+    mv_inv_t = inv(mv[:3, :3]).T
 
-    def as_amaranth_matrix(np_mat):
-        return Cat(FixedPoint_mem.const(v) for v in np_mat.flatten())
+    async def init_proc(ctx):
+        # Set transformation matrices
+        ctx.set(dut.position_mv, mv.flatten().tolist())
+        ctx.set(dut.position_p, proj.flatten().tolist())
+        ctx.set(dut.normal_mv_inv_t, mv_inv_t.flatten().tolist())
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("position", "MV"),), as_amaranth_matrix(mv)),
-            ((("position", "P"),), as_amaranth_matrix(proj)),
-            ((("normal", "MV_inv_t"),), as_amaranth_matrix(mv_inv_t)),
-            ((("enable",),), C(0b000)),
-        ],
-        "dut",
-    )
+        # Disable normal and texture transforms
+        ctx.set(dut.enabled.normal, 0)
+        for i in range(2):
+            ctx.set(dut.enabled.texture[i], 0)
+
+        # Set texture transforms to identity
+        for i in range(2):
+            ctx.set(dut.texture_transforms[i], identity_mat(4).flatten().tolist())
 
     async def output_checker(ctx, results):
         assert len(results) == 1
@@ -76,7 +76,7 @@ def test_identity_transform_positions():
         input_data=[vertex],
         output_stream=dut.os_vertex,
         output_data_checker=output_checker,
-        init_process=t.initialize_csrs,
+        init_process=init_proc,
         is_finished=dut.ready,
     )
 

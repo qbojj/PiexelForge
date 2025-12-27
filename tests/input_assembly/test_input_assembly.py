@@ -32,28 +32,26 @@ def make_test_input_assembly(
     dut = InputAssembly()
     t = SimpleTestbench(dut, mem_addr=addr, mem_size=1024)
 
-    t.set_csrs(
-        dut.csr_bus,
-        [
-            ((("position", "mode"),), pos_mode),
-            ((("position", "data"),), pos_data),
-            ((("normal", "mode"),), norm_mode),
-            ((("normal", "data"),), norm_data),
-            ((("texcoords", "0", "mode"),), tex0_mode),
-            ((("texcoords", "0", "data"),), tex0_data),
-            ((("texcoords", "1", "mode"),), tex1_mode),
-            ((("texcoords", "1", "data"),), tex1_data),
-            ((("color", "mode"),), color_mode),
-            ((("color", "data"),), color_data),
-        ],
-        "input_assembly",
-    )
-
     t.arbiter.add(dut.bus)
 
     async def tb(ctx):
         await t.initialize_memory(ctx, addr, memory_data)
-        await t.initialize_csrs(ctx)
+
+        # Configure each attribute
+        ctx.set(dut.config.position.mode, pos_mode)
+        ctx.set(dut.config.position.info, pos_data)
+
+        ctx.set(dut.config.normal.mode, norm_mode)
+        ctx.set(dut.config.normal.info, norm_data)
+
+        ctx.set(dut.config.texcoords[0].mode, tex0_mode)
+        ctx.set(dut.config.texcoords[0].info, tex0_data)
+
+        ctx.set(dut.config.texcoords[1].mode, tex1_mode)
+        ctx.set(dut.config.texcoords[1].info, tex1_data)
+
+        ctx.set(dut.config.color.mode, color_mode)
+        ctx.set(dut.config.color.info, color_data)
 
     sim = Simulator(t)
     sim.add_clock(1e-9)

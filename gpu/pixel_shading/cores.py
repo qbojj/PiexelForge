@@ -23,6 +23,9 @@ from ..utils.layouts import (
 )
 from ..utils.types import CompareOp, FixedPoint, Vector4
 
+one = fixed.Const(1.0)
+zero = fixed.Const(0.0)
+
 
 class StencilOp(enum.Enum, shape=unsigned(3)):
     """Stencil operations (what to do with stencil value)"""
@@ -235,9 +238,13 @@ class DepthStencilTest(wiring.Component):
                     m.d.sync += s_accepted.eq(0)
                     m.d.sync += d_accepted.eq(0)
 
-                    depth_zero_one = (v.depth + fixed.Const(1.0)) >> 1
-
-                    m.d.sync += d_frag.eq((depth_zero_one * (1 << 16)).floor())
+                    # TODO: handle minDepth and maxDepth from fb_info
+                    depth_zero_one = ((self.is_fragment.p.depth + one) >> 1).clamp(
+                        zero, one
+                    )
+                    m.d.sync += d_frag.eq(
+                        ((depth_zero_one << 16) - depth_zero_one).round()
+                    )
 
                     m.next = "PREPARE"
 
@@ -294,21 +301,17 @@ class DepthStencilTest(wiring.Component):
                     m.next = "CHECK_DEPTH_STENCIL"
 
             with m.State("CHECK_DEPTH_STENCIL"):
-                s_passed = (
-                    perform_compare(
-                        s_conf.compare_op,
-                        stencil_value & s_conf.mask,
-                        s_conf.reference & s_conf.mask,
-                    )
-                    | ~self.depth_conf.test_enabled
+                s_passed = perform_compare(
+                    s_conf.compare_op,
+                    stencil_value & s_conf.mask,
+                    s_conf.reference & s_conf.mask,
                 )
-                d_passed = (
-                    perform_compare(self.depth_conf.compare_op, d_frag, depth_value)
-                    | ~self.depth_conf.test_enabled
+                d_passed = perform_compare(
+                    self.depth_conf.compare_op, d_frag, depth_value
                 )
 
                 m.d.sync += s_accepted.eq(s_passed)
-                m.d.sync += d_accepted.eq(d_passed)
+                m.d.sync += d_accepted.eq(d_passed | ~self.depth_conf.test_enabled)
                 m.d.sync += [
                     Print(
                         Format(
@@ -411,18 +414,14 @@ class DepthStencilTest(wiring.Component):
                         m.next = "SEND"
 
             with m.State("OUTPUT_DEPTH"):
-                out_data = Signal(16)
-
-                # TODO: handle minDepth and maxDepth from fb_info
-                m.d.comb += out_data.eq((v.depth * (1 << 16)).floor())
                 m.d.sync += Print(
-                    Format("Writing depth value: {}, {}", v.depth, out_data)
+                    Format("Writing depth value: {}, {}", v.depth, d_frag)
                 )
 
                 m.d.sync += Print(
                     Format(
                         "Writing {} depth to address {} offset {}",
-                        out_data,
+                        d_frag,
                         depth_addr,
                         depth_offset,
                     )
@@ -434,10 +433,11 @@ class DepthStencilTest(wiring.Component):
                     self.wb_bus.we.eq(1),
                     self.wb_bus.stb.eq(1),
                     self.wb_bus.sel.eq(0x3 << depth_offset),
-                    self.wb_bus.dat_w.eq(out_data << (depth_offset * 8)),
+                    self.wb_bus.dat_w.eq(d_frag << (depth_offset * 8)),
                 ]
                 with m.If(self.wb_bus.ack):
                     m.next = "SEND"
+
             with m.State("SEND"):
                 m.d.comb += self.os_fragment.valid.eq(1)
                 m.d.comb += self.os_fragment.payload.eq(v)
@@ -482,9 +482,6 @@ class SwapchainOutput(wiring.Component):
         src_a = v.color[3]
         dst_rgb = dst_data[0:3]
         dst_a = dst_data[3]
-
-        one = fixed.Const(1.0)
-        zero = fixed.Const(0.0)
 
         def factor_value(factor):
             ret = Signal(FixedPoint)
@@ -548,7 +545,7 @@ class SwapchainOutput(wiring.Component):
                     m.d.sync += [
                         dst_data[i].eq(
                             self.wb_bus.dat_r.word_select(i, 8)
-                            * fixed.Const(1.0 / 255.0)
+                            * fixed.Const(1.0 / 255.0, shape=fixed.UQ(0, 8))
                         )
                         for i in range(4)
                     ]
@@ -623,10 +620,12 @@ class SwapchainOutput(wiring.Component):
 
             with m.State("WRITE_OUTPUT"):
                 ret_v = Signal(data.ArrayLayout(unsigned(8), 4))
+                col_clamped = Array(Signal(FixedPoint) for _ in range(4))
+                for i in range(4):
+                    m.d.comb += col_clamped[i].eq(out_color[i].clamp(zero, one))
+
                 m.d.comb += [
-                    ret_v[i].eq(
-                        ((out_color[i]).clamp(zero, one) * fixed.Const(255)).round()
-                    )
+                    ret_v[i].eq(((col_clamped[i] << 8) - col_clamped[i]).round())
                     for i in range(4)
                 ]
                 m.d.comb += [

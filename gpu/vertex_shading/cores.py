@@ -1,10 +1,27 @@
 from amaranth import *
-from amaranth.lib import stream, wiring
+from amaranth.lib import data, stream, wiring
 from amaranth.lib.wiring import In, Out
-from amaranth_soc import csr
 
 from ..utils.layouts import PrimitiveAssemblyLayout, ShadingVertexLayout
 from ..utils.types import Vector3_mem, Vector4_mem
+
+
+class LightPropertyLayout(data.Struct):
+    """Light properties layout"""
+
+    position: Vector4_mem
+    ambient: Vector3_mem
+    diffuse: Vector3_mem
+    specular: Vector3_mem
+
+
+class MaterialPropertyLayout(data.Struct):
+    """Material properties layout"""
+
+    ambient: Vector3_mem
+    diffuse: Vector3_mem
+    specular: Vector3_mem
+    shininess: unsigned(32)
 
 
 class VertexShading(wiring.Component):
@@ -16,37 +33,27 @@ class VertexShading(wiring.Component):
     Input: ShadingVertexLayout
     Output: ShadingVertexLayout
 
-    Uses following registers for material properties:
+    Uses following wires for material properties:
     - material_ambient: Ambient color of the material (vec3)
     - material_diffuse: Diffuse color of the material (vec3)
     - material_specular: Specular color of the material (vec3)
     - material_shininess: Shininess coefficient of the material (float)
 
-    Uses following registers for light properties:
-    - light_position: Position of the light in world space (vec4)
-    - light_ambient: Ambient color of the light (vec3)
-    - light_diffuse: Diffuse color of the light (vec3)
-    - light_specular: Specular color of the light (vec3)
-
-    for NUM_LIGHTS lights.
-
-    TODO: implement lighting (for now only passthrough)
+    Uses following wires for light properties:
+    - light: array of light property structures
     """
 
     is_vertex: In(stream.Signature(ShadingVertexLayout))
     os_vertex: Out(stream.Signature(PrimitiveAssemblyLayout))
 
+    material: In(MaterialPropertyLayout)
+    lights: In(data.ArrayLayout(LightPropertyLayout, 1))
+
     ready: Out(1)
 
-    class LightReg(csr.Register, access="rw"):
-        position: csr.Field(csr.action.RW, Vector4_mem)
-        ambient: csr.Field(csr.action.RW, Vector3_mem)
-        diffuse: csr.Field(csr.action.RW, Vector3_mem)
-        specular: csr.Field(csr.action.RW, Vector3_mem)
-
-    def __init__(self, num_lights):
+    def __init__(self, num_lights=1):
+        self.num_lights = num_lights
         super().__init__()
-        # TODO: implement
 
     def elaborate(self, platform):
         m = Module()
