@@ -38,20 +38,20 @@ def make_test_input_assembly(
         await t.initialize_memory(ctx, addr, memory_data)
 
         # Configure each attribute
-        ctx.set(dut.config.position.mode, pos_mode)
-        ctx.set(dut.config.position.info, pos_data)
+        ctx.set(dut.c_pos.mode, pos_mode)
+        ctx.set(dut.c_pos.info, pos_data)
 
-        ctx.set(dut.config.normal.mode, norm_mode)
-        ctx.set(dut.config.normal.info, norm_data)
+        ctx.set(dut.c_norm.mode, norm_mode)
+        ctx.set(dut.c_norm.info, norm_data)
 
-        ctx.set(dut.config.texcoords[0].mode, tex0_mode)
-        ctx.set(dut.config.texcoords[0].info, tex0_data)
+        ctx.set(dut.c_tex[0].mode, tex0_mode)
+        ctx.set(dut.c_tex[0].info, tex0_data)
 
-        ctx.set(dut.config.texcoords[1].mode, tex1_mode)
-        ctx.set(dut.config.texcoords[1].info, tex1_data)
+        ctx.set(dut.c_tex[1].mode, tex1_mode)
+        ctx.set(dut.c_tex[1].info, tex1_data)
 
-        ctx.set(dut.config.color.mode, color_mode)
-        ctx.set(dut.config.color.info, color_data)
+        ctx.set(dut.c_col.mode, color_mode)
+        ctx.set(dut.c_col.info, color_data)
 
     sim = Simulator(t)
     sim.add_clock(1e-9)

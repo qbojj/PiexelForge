@@ -353,15 +353,6 @@ class InputAssemblyAttrConfigLayout(data.Struct):
     info: InputData
 
 
-class InputAssemblyConfigLayout(data.Struct):
-    """Input assembly configuration for all attributes"""
-
-    position: InputAssemblyAttrConfigLayout
-    normal: InputAssemblyAttrConfigLayout
-    texcoords: data.ArrayLayout(InputAssemblyAttrConfigLayout, num_textures)
-    color: InputAssemblyAttrConfigLayout
-
-
 class InputAssembly(wiring.Component):
     """Input Assembly stage.
 
@@ -381,10 +372,10 @@ class InputAssembly(wiring.Component):
     )
     ready: Out(1)
 
-    config: In(InputAssemblyConfigLayout)
-
-    def __init__(self):
-        super().__init__()
+    c_pos: In(InputAssemblyAttrConfigLayout)
+    c_norm: In(InputAssemblyAttrConfigLayout)
+    c_tex: In(InputAssemblyAttrConfigLayout).array(num_textures)
+    c_col: In(InputAssemblyAttrConfigLayout)
 
     def elaborate(self, platform) -> Module:
         m = Module()
@@ -394,7 +385,7 @@ class InputAssembly(wiring.Component):
         idx = Signal.like(self.is_index.payload)
         vtx = Signal.like(self.os_vertex.payload)
 
-        addr = Signal.like(self.config.position.info.per_vertex.address)
+        addr = Signal.like(self.c_pos.info.per_vertex.address)
 
         output_next_free = ~self.os_vertex.valid | self.os_vertex.ready
 
@@ -412,25 +403,13 @@ class InputAssembly(wiring.Component):
 
         attr_info = Array(
             [
-                AttrInfo(
-                    config=self.config.position,
-                    data_v=vtx.position,
-                ),
-                AttrInfo(
-                    config=self.config.normal,
-                    data_v=vtx.normal,
-                ),
+                AttrInfo(config=self.c_pos, data_v=vtx.position),
+                AttrInfo(config=self.c_norm, data_v=vtx.normal),
                 *[
-                    AttrInfo(
-                        config=self.config.texcoords[i],
-                        data_v=vtx.texcoords[i],
-                    )
+                    AttrInfo(config=self.c_tex[i], data_v=vtx.texcoords[i])
                     for i in range(num_textures)
                 ],
-                AttrInfo(
-                    config=self.config.color,
-                    data_v=vtx.color,
-                ),
+                AttrInfo(config=self.c_col, data_v=vtx.color),
             ]
         )
 

@@ -21,7 +21,7 @@ from ..utils.layouts import (
     wb_bus_addr_width,
     wb_bus_data_width,
 )
-from ..utils.types import CompareOp, FixedPoint, Vector4
+from ..utils.types import CompareOp, FixedPoint
 
 one = fixed.Const(1.0)
 zero = fixed.Const(0.0)
@@ -467,7 +467,6 @@ class SwapchainOutput(wiring.Component):
                     wishbone_Signature(
                         addr_width=wb_bus_addr_width,
                         data_width=wb_bus_data_width,
-                        granularity=32,
                     )
                 ),
             }
@@ -476,29 +475,26 @@ class SwapchainOutput(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        v = Signal.like(self.is_fragment.payload)
-
         color_shape = fixed.UQ(0, 16)
 
+        src_data = Signal(data.ArrayLayout(color_shape, 4))
         dst_data = Signal(data.ArrayLayout(color_shape, 4))
+        out_data = Signal(data.ArrayLayout(color_shape, 4))
 
         color_addr = Signal(wb_bus_addr_width)
-        color_offset = Signal(range(4))
 
-        out_color = Signal(Vector4)
-
-        src_rgb = v.color[0:3]
-        src_a = v.color[3]
+        src_rgb = src_data[0:3]
+        src_a = src_data[3]
         dst_rgb = dst_data[0:3]
         dst_a = dst_data[3]
 
         def factor_value(factor):
-            ret = Signal(FixedPoint)
+            ret = Signal(color_shape)
             with m.Switch(factor):
                 with m.Case(BlendFactor.ZERO):
                     m.d.comb += ret.eq(0.0)
                 with m.Case(BlendFactor.ONE):
-                    m.d.comb += ret.eq(1.0)
+                    m.d.comb += ret.eq(color_shape.max())
                 with m.Case(BlendFactor.SRC_COLOR):
                     m.d.sync += Assert(
                         False, "Not implemented: SRC_COLOR factor in blending"
@@ -518,28 +514,37 @@ class SwapchainOutput(wiring.Component):
                 with m.Case(BlendFactor.SRC_ALPHA):
                     m.d.comb += ret.eq(src_a)
                 with m.Case(BlendFactor.ONE_MINUS_SRC_ALPHA):
-                    m.d.comb += ret.eq(one - src_a)
+                    m.d.comb += ret.eq(color_shape.max() - src_a)
                 with m.Case(BlendFactor.DST_ALPHA):
                     m.d.comb += ret.eq(dst_a)
                 with m.Case(BlendFactor.ONE_MINUS_DST_ALPHA):
-                    m.d.comb += ret.eq(one - dst_a)
+                    m.d.comb += ret.eq(color_shape.max() - dst_a)
             return ret
 
         with m.FSM():
             with m.State("IDLE"):
                 m.d.comb += self.is_fragment.ready.eq(1)
                 with m.If(self.is_fragment.valid):
-                    m.d.sync += v.eq(self.is_fragment.payload)
-
-                    m.d.sync += Cat(color_offset, color_addr).eq(
-                        self.fb_info.color_address
-                        + (self.is_fragment.p.coord_pos[1] * self.fb_info.color_pitch)
-                        + (self.is_fragment.p.coord_pos[0] * 4)
+                    m.d.sync += color_addr.eq(
+                        self.fb_info.color_address[2:]
+                        + (
+                            self.is_fragment.p.coord_pos[1]
+                            * self.fb_info.color_pitch[2:]
+                        )
+                        + (self.is_fragment.p.coord_pos[0])
                     )
+                    in_data = Signal(data.ArrayLayout(color_shape, 4))
+                    m.d.comb += [
+                        in_data[i].eq(
+                            (self.is_fragment.payload.color[i]).saturate(color_shape)
+                        )
+                        for i in range(4)
+                    ]
                     with m.If(self.conf.enabled):
+                        m.d.sync += src_data.eq(in_data)
                         m.next = "READ_DEST"
                     with m.Else():
-                        m.d.sync += out_color.eq(self.is_fragment.payload.color)
+                        m.d.sync += out_data.eq(in_data)
                         m.next = "WRITE_OUTPUT"
 
             with m.State("READ_DEST"):
@@ -580,21 +585,27 @@ class SwapchainOutput(wiring.Component):
 
                     with m.Switch(self.conf.blend_op):
                         with m.Case(BlendOp.ADD):
-                            m.d.sync += out_color[i].eq(src_scaled + dst_scaled)
+                            m.d.sync += out_data[i].eq(
+                                (src_scaled + dst_scaled).saturate(color_shape)
+                            )
                         with m.Case(BlendOp.SUBTRACT):
-                            m.d.sync += out_color[i].eq(src_scaled - dst_scaled)
+                            m.d.sync += out_data[i].eq(
+                                (src_scaled - dst_scaled).saturate(color_shape)
+                            )
                         with m.Case(BlendOp.REVERSE_SUBTRACT):
-                            m.d.sync += out_color[i].eq(dst_scaled - src_scaled)
+                            m.d.sync += out_data[i].eq(
+                                (dst_scaled - src_scaled).saturate(color_shape)
+                            )
                         with m.Case(BlendOp.MIN):
                             with m.If(src_comp < dst_comp):
-                                m.d.sync += out_color[i].eq(src_comp)
+                                m.d.sync += out_data[i].eq(src_comp)
                             with m.Else():
-                                m.d.sync += out_color[i].eq(dst_comp)
+                                m.d.sync += out_data[i].eq(dst_comp)
                         with m.Case(BlendOp.MAX):
                             with m.If(src_comp > dst_comp):
-                                m.d.sync += out_color[i].eq(src_comp)
+                                m.d.sync += out_data[i].eq(src_comp)
                             with m.Else():
-                                m.d.sync += out_color[i].eq(dst_comp)
+                                m.d.sync += out_data[i].eq(dst_comp)
                 m.next = "BLEND_A"
 
             with m.State("BLEND_A"):
@@ -611,32 +622,36 @@ class SwapchainOutput(wiring.Component):
 
                 with m.Switch(self.conf.blend_a_op):
                     with m.Case(BlendOp.ADD):
-                        m.d.sync += out_color[3].eq(src_scaled + dst_scaled)
+                        m.d.sync += out_data[3].eq(
+                            (src_scaled + dst_scaled).saturate(color_shape)
+                        )
                     with m.Case(BlendOp.SUBTRACT):
-                        m.d.sync += out_color[3].eq(src_scaled - dst_scaled)
+                        m.d.sync += out_data[3].eq(
+                            (src_scaled - dst_scaled).saturate(color_shape)
+                        )
                     with m.Case(BlendOp.REVERSE_SUBTRACT):
-                        m.d.sync += out_color[3].eq(dst_scaled - src_scaled)
+                        m.d.sync += out_data[3].eq(
+                            (dst_scaled - src_scaled).saturate(color_shape)
+                        )
                     with m.Case(BlendOp.MIN):
                         with m.If(src_a < dst_a):
-                            m.d.sync += out_color[3].eq(src_a)
+                            m.d.sync += out_data[3].eq(src_a)
                         with m.Else():
-                            m.d.sync += out_color[3].eq(dst_a)
+                            m.d.sync += out_data[3].eq(dst_a)
                     with m.Case(BlendOp.MAX):
                         with m.If(src_a > dst_a):
-                            m.d.sync += out_color[3].eq(src_a)
+                            m.d.sync += out_data[3].eq(src_a)
                         with m.Else():
-                            m.d.sync += out_color[3].eq(dst_a)
+                            m.d.sync += out_data[3].eq(dst_a)
 
                 m.next = "WRITE_OUTPUT"
 
             with m.State("WRITE_OUTPUT"):
                 ret_v = Signal(data.ArrayLayout(unsigned(8), 4))
-                col_clamped = Array(Signal(FixedPoint) for _ in range(4))
-                for i in range(4):
-                    m.d.comb += col_clamped[i].eq(out_color[i].clamp(zero, one))
 
                 m.d.comb += [
-                    ret_v[i].eq(((col_clamped[i] << 8) - col_clamped[i]).round())
+                    # Convert from fixed-point [0,1] to [0,255]
+                    ret_v[i].eq(((out_data[i] << 8) - out_data[i]).round())
                     for i in range(4)
                 ]
                 m.d.comb += [
