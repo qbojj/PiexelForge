@@ -60,8 +60,6 @@ class VertexShading(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        m.d.comb += self.ready.eq(~self.os_vertex.valid)
-
         # Cached vertex and light data
         n = Array(Signal(FixedPoint) for _ in range(3))
         v_color = Array(Signal.like(self.is_vertex.p.color[i]) for i in range(4))

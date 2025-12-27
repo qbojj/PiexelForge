@@ -100,7 +100,7 @@ class IndexGenerator(wiring.Component):
 
         with m.FSM():
             with m.State("IDLE"):
-                m.d.comb += self.ready.eq(~self.os_index.valid)
+                m.d.comb += self.ready.eq(1)
                 with m.If(self.start):
                     m.d.sync += [
                         cur_idx.eq(0),
@@ -194,7 +194,7 @@ class InputTopologyProcessor(wiring.Component):
 
         ready_for_input = Signal()
 
-        m.d.comb += self.ready.eq(ready_for_input & ~self.os_index.valid)
+        m.d.comb += self.ready.eq(ready_for_input)
         m.d.comb += ready_for_input.eq(to_send_left == 0)
 
         with m.Switch(to_send_left):

@@ -25,6 +25,7 @@ class PrimitiveClipper(wiring.Component):
     os_vertex: Out(stream.Signature(RasterizerLayout))
 
     prim_type: In(PrimitiveType)
+    ready: Out(1)
 
     def elaborate(self, platform):
         m = Module()
@@ -70,7 +71,7 @@ class PrimitiveClipper(wiring.Component):
 
         with m.FSM():
             with m.State("COLLECT"):
-                m.d.comb += self.is_vertex.ready.eq(1)
+                m.d.comb += [self.is_vertex.ready.eq(1), self.ready.eq(1)]
                 with m.If(self.is_vertex.valid):
                     m.d.sync += buf[idx].eq(self.is_vertex.payload)
                     with m.If(idx == (needed - 1)):

@@ -26,6 +26,7 @@ class TriangleRasterizer(wiring.Component):
 
     # Framebuffer configuration
     fb_info: In(FramebufferInfoLayout)
+    ready: Out(1)
 
     def __init__(self, inv_steps: int = 4, subpixel_bits: int = 4):
         """Initialize the rasterizer.
@@ -113,7 +114,7 @@ class TriangleRasterizer(wiring.Component):
 
         with m.FSM():
             with m.State("COLLECT"):
-                m.d.comb += self.is_vertex.ready.eq(1)
+                m.d.comb += [self.is_vertex.ready.eq(1), self.ready.eq(1)]
                 with m.If(self.is_vertex.valid):
                     m.d.sync += vtx[vtx_idx].eq(self.is_vertex.payload)
                     with m.If(vtx_idx == 2):

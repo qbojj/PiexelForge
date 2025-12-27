@@ -157,6 +157,21 @@ class GraphicsPipeline(wiring.Component):
         wiring.connect(m, ds.wb_bus, wiring.flipped(self.wb_depthstencil))
         wiring.connect(m, sc.wb_bus, wiring.flipped(self.wb_color))
 
+        # Pipeline-wide ready: AND of all sub-module ready signals only
+        m.d.comb += self.ready.eq(
+            idx.ready
+            & topo.ready
+            & ia.ready
+            & vtx_xf.ready
+            & vtx_sh.ready
+            & pa.ready
+            & clip.ready
+            & rast.ready
+            & tex.ready
+            & ds.ready
+            & sc.ready
+        )
+
         # IndexGenerator configuration
         m.d.comb += [
             idx.c_address.eq(self.c_index_address),
@@ -164,7 +179,6 @@ class GraphicsPipeline(wiring.Component):
             idx.c_kind.eq(self.c_index_kind),
             idx.start.eq(self.start),
         ]
-        m.d.comb += self.ready.eq(idx.ready)
 
         # Topology configuration
         m.d.comb += [

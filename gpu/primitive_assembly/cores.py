@@ -35,30 +35,18 @@ class PrimitiveAssembly(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        # Advertise readiness to upstream; simple reflection of output backpressure.
-        m.d.comb += self.ready.eq(~self.os_primitive.valid)
-
-        with m.If(self.os_primitive.ready):
-            m.d.sync += self.os_primitive.valid.eq(0)
-
         with m.Switch(self.config.type):
             with m.Case(PrimitiveType.POINTS, PrimitiveType.LINES):
                 # Simple pass-through for points and lines
-                with m.If(
-                    self.is_vertex.valid
-                    & (~self.os_primitive.valid | self.os_primitive.ready)
-                ):
-                    m.d.comb += self.is_vertex.ready.eq(1)
-
-                    m.d.sync += [
-                        self.os_primitive.valid.eq(1),
-                        self.os_primitive.p.position_ndc.eq(
-                            self.is_vertex.p.position_ndc
-                        ),
-                        self.os_primitive.p.texcoords.eq(self.is_vertex.p.texcoords),
-                        self.os_primitive.p.color.eq(self.is_vertex.p.color),
-                        self.os_primitive.p.front_facing.eq(1),
-                    ]
+                m.d.comb += self.ready.eq(1)
+                m.d.comb += [
+                    self.is_vertex.ready.eq(self.os_primitive.ready),
+                    self.os_primitive.valid.eq(self.is_vertex.valid),
+                    self.os_primitive.p.position_ndc.eq(self.is_vertex.p.position_ndc),
+                    self.os_primitive.p.texcoords.eq(self.is_vertex.p.texcoords),
+                    self.os_primitive.p.color.eq(self.is_vertex.p.color),
+                    self.os_primitive.p.front_facing.eq(1),
+                ]
             with m.Case(PrimitiveType.TRIANGLES):
                 # calculate front facing
                 trinagle = Array(Signal.like(self.is_vertex.payload) for _ in range(3))
@@ -66,7 +54,7 @@ class PrimitiveAssembly(wiring.Component):
                 front_facing = Signal()
 
                 def send_vertex(m, ff, idx):
-                    m.d.sync += [
+                    m.d.comb += [
                         self.os_primitive.valid.eq(1),
                         self.os_primitive.p.position_ndc.eq(trinagle[idx].position_ndc),
                         self.os_primitive.p.texcoords.eq(trinagle[idx].texcoords),
@@ -78,9 +66,8 @@ class PrimitiveAssembly(wiring.Component):
 
                 with m.FSM():
                     with m.State("WAIT_VERTEX"):
+                        m.d.comb += [self.is_vertex.ready.eq(1), self.ready.eq(1)]
                         with m.If(self.is_vertex.valid):
-                            m.d.comb += self.is_vertex.ready.eq(1)
-
                             m.d.sync += [
                                 trinagle[idx].eq(self.is_vertex.payload),
                                 idx.eq(idx + 1),
@@ -150,18 +137,19 @@ class PrimitiveAssembly(wiring.Component):
                         with m.Elif(~ff & ((cull_v & CullFace.BACK.value) != 0)):
                             m.d.sync += Print("Culling back face")
                             m.next = "WAIT_VERTEX"  # cull primitive
-                        with m.Elif(self.os_primitive.ready | ~self.os_primitive.valid):
+                        with m.Else():
                             # Register front_facing for use in subsequent states
                             m.d.sync += front_facing.eq(ff)
                             send_vertex(m, ff, 0)
-                            m.next = "SEND_VERTEX_1"
+                            with m.If(self.os_primitive.ready):
+                                m.next = "SEND_VERTEX_1"
                     with m.State("SEND_VERTEX_1"):
-                        with m.If(self.os_primitive.ready | ~self.os_primitive.valid):
-                            send_vertex(m, front_facing, 1)
+                        send_vertex(m, front_facing, 1)
+                        with m.If(self.os_primitive.ready):
                             m.next = "SEND_VERTEX_2"
                     with m.State("SEND_VERTEX_2"):
-                        with m.If(self.os_primitive.ready | ~self.os_primitive.valid):
-                            send_vertex(m, front_facing, 2)
+                        send_vertex(m, front_facing, 2)
+                        with m.If(self.os_primitive.ready):
                             m.next = "WAIT_VERTEX"
 
         return m
