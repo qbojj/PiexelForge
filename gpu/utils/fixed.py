@@ -196,6 +196,24 @@ class Value(hdl.ValueCastable):
             result = Shape(shape, f_bits)(self.as_value())
         return result
 
+    def reshape_round(self, f_bits):
+        # Reshape with rounding when reducing precision.
+        if f_bits >= self.f_bits:
+            return self.reshape(f_bits)
+        else:
+            r = self.reshape(f_bits)
+            do_inc = self.as_value()[self.f_bits - f_bits - 1]
+            return r.shape()(r.as_value() + do_inc)
+
+    def reshape_ceil(self, f_bits):
+        # Reshape with ceiling when reducing precision.
+        if f_bits >= self.f_bits:
+            return self.reshape(f_bits)
+        else:
+            r = self.reshape(f_bits)
+            do_inc = self.as_value()[(self.f_bits - f_bits) - 1 :] != 0
+            return r.shape()(r.as_value() + do_inc)
+
     def truncate(self, f_bits=0):
         if f_bits > self.f_bits:
             raise ValueError(
@@ -203,6 +221,22 @@ class Value(hdl.ValueCastable):
                 "Use `.reshape()` to instead extend `f_bits`."
             )
         return self.reshape(f_bits)
+
+    def truncate_round(self, f_bits=0):
+        if f_bits > self.f_bits:
+            raise ValueError(
+                f"`.truncate_round(f_bits={f_bits}) exceeds the underlying type's f_bits={self.f_bits}. "
+                "Use `.reshape()` to instead extend `f_bits`."
+            )
+        return self.reshape_round(f_bits)
+
+    def truncate_ceil(self, f_bits=0):
+        if f_bits > self.f_bits:
+            raise ValueError(
+                f"`.truncate_ceil(f_bits={f_bits}) exceeds the underlying type's f_bits={self.f_bits}. "
+                "Use `.reshape()` to instead extend `f_bits`."
+            )
+        return self.reshape_ceil(f_bits)
 
     def clamp(self, lo, hi):
         if not isinstance(lo, Value) or not isinstance(hi, Value):
@@ -224,15 +258,13 @@ class Value(hdl.ValueCastable):
         return Value(shape, clamped.as_value())
 
     def floor(self) -> hdl.Value:
-        return self.as_value()[self.f_bits :]
+        return self.truncate(0).as_value()
 
     def ceil(self) -> hdl.Value:
-        return self.floor() + (self.as_value()[: self.f_bits] != 0)
+        return self.truncate_ceil(0).as_value()
 
     def round(self) -> hdl.Value:
-        if self.f_bits == 0:
-            return self.as_value()
-        return (self + Const(0.5)).floor()
+        return self.truncate_round(0).as_value()
 
     def _binary_op(
         self,

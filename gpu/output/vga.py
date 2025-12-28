@@ -88,7 +88,9 @@ class FrameBufferDMA(wiring.Component):
 
         fifo_soft_reset = Signal()
 
-        m.domains.fifo_bus_domain = fifo_bus_domain = ClockDomain(local=True)
+        m.domains.fifo_bus_domain = fifo_bus_domain = ClockDomain(
+            "fifo_bus_domain", local=True
+        )
         fifo_bus_domain.clk = ClockSignal(self._bus_domain)
         fifo_bus_domain.rst = ResetSignal(self._bus_domain) | fifo_soft_reset
 
@@ -97,7 +99,7 @@ class FrameBufferDMA(wiring.Component):
         # Create FIFO with appropriate clock domain crossing
         fifo_width = RGBColorLayout.as_shape()
         if self._bus_domain == self._stream_domain:
-            m.submodules.color_fifo = color_fifo = DomainRenamer(fifo_bus_domain)(
+            m.submodules.color_fifo = color_fifo = DomainRenamer("fifo_bus_domain")(
                 fifo.SyncFIFOBuffered(
                     width=fifo_width,
                     depth=data_depth,
@@ -107,7 +109,7 @@ class FrameBufferDMA(wiring.Component):
             m.submodules.color_fifo = color_fifo = fifo.AsyncFIFOBuffered(
                 width=fifo_width,
                 depth=data_depth,
-                write_domain=fifo_bus_domain,
+                write_domain="fifo_bus_domain",
                 read_domain=self._stream_domain,
             )
 
@@ -248,17 +250,17 @@ class VGADisplay(wiring.Component):
         with m.Else():
             m.d.sync += x_cnt.eq(x_cnt + 1)
 
-        # Sync pulses (active low)
+        # Sync pulses
         m.d.sync += self.vga.h_sync.eq(
-            ~((x_cnt >= H_VISIBLE + H_FRONT) & (x_cnt < H_VISIBLE + H_FRONT + H_SYNC))
+            (x_cnt >= H_VISIBLE + H_FRONT) & (x_cnt < H_VISIBLE + H_FRONT + H_SYNC)
         )
         m.d.sync += self.vga.v_sync.eq(
-            ~((y_cnt >= V_VISIBLE + V_FRONT) & (y_cnt < V_VISIBLE + V_FRONT + V_SYNC))
+            (y_cnt >= V_VISIBLE + V_FRONT) & (y_cnt < V_VISIBLE + V_FRONT + V_SYNC)
         )
         m.d.comb += self.vga.clk.eq(ClockSignal())
-        m.d.sync += self.vga.blank.eq((x_cnt < H_VISIBLE) & (y_cnt < V_VISIBLE))
+        m.d.sync += self.vga.blank.eq((x_cnt >= H_VISIBLE) & (y_cnt >= V_VISIBLE))
 
-        with m.If(self.vga.blank):
+        with m.If((x_cnt < H_VISIBLE) & (y_cnt < V_VISIBLE)):
             # During visible area, output pixel data from stream
             with m.If(self.color_stream.valid & self.color_stream.ready):
                 m.d.sync += [
