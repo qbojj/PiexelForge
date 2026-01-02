@@ -29,6 +29,11 @@ class PrimitiveAssembly(wiring.Component):
 
     prim_config: In(PrimitiveAssemblyConfigLayout)
 
+    @property
+    def config(self):
+        # Backward-compatible alias expected by tests and benches
+        return self.prim_config
+
     def __init__(self):
         super().__init__()
 
