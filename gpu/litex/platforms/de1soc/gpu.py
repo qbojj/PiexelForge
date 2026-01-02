@@ -6,7 +6,6 @@
 # Copyright (c) 2025
 # SPDX-License-Identifier: BSD-2-Clause
 
-from hps.core import HPS
 from litedram.modules import IS42S16320
 from litedram.phy import GENSDRPHY
 from litex.build.io import DDROutput
@@ -22,6 +21,7 @@ from migen import *
 from gpu.litex import LiteXGPU
 
 from .de1soc_platform import Platform
+from .hps.core import HPS
 
 CPUS.update({"hps": HPS})
 
@@ -85,6 +85,7 @@ class BaseSoC(SoCCore):
         )
 
         # SoCCore ----------------------------------------------------------------------------------
+
         SoCCore.__init__(
             self,
             platform,
@@ -94,7 +95,7 @@ class BaseSoC(SoCCore):
         )
 
         # SDR SDRAM --------------------------------------------------------------------------------
-        if not self.integrated_main_ram_size:
+        if not self.integrated_main_ram_size and kwargs.get("cpu_type") != "hps":
             self.sdrphy = GENSDRPHY(platform.request("sdram"), sys_clk_freq)
             self.add_sdram(
                 "sdram",

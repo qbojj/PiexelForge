@@ -21,7 +21,7 @@ from ..utils.layouts import (
     wb_bus_addr_width,
     wb_bus_data_width,
 )
-from ..utils.types import CompareOp, FixedPoint
+from ..utils.types import CompareOp
 
 one = fixed.Const(1.0)
 zero = fixed.Const(0.0)
@@ -491,11 +491,14 @@ class SwapchainOutput(wiring.Component):
     def elaborate(self, platform):
         m = Module()
 
-        color_shape = fixed.UQ(0, 16)
+        color_shape = fixed.UQ(0, 9)
+        one = fixed.Const(1.0).saturate(color_shape)
 
         src_data = Signal(data.ArrayLayout(color_shape, 4))
         dst_data = Signal(data.ArrayLayout(color_shape, 4))
-        out_data = Signal(data.ArrayLayout(color_shape, 4))
+
+        big_shape = fixed.SQ(3, 18)
+        out_data = Signal(data.ArrayLayout(big_shape, 4))
 
         color_addr = Signal(wb_bus_addr_width)
 
@@ -510,7 +513,7 @@ class SwapchainOutput(wiring.Component):
                 with m.Case(BlendFactor.ZERO):
                     m.d.comb += ret.eq(0.0)
                 with m.Case(BlendFactor.ONE):
-                    m.d.comb += ret.eq(color_shape.max())
+                    m.d.comb += ret.eq(one)
                 with m.Case(BlendFactor.SRC_COLOR):
                     m.d.sync += Assert(
                         False, "Not implemented: SRC_COLOR factor in blending"
@@ -530,11 +533,11 @@ class SwapchainOutput(wiring.Component):
                 with m.Case(BlendFactor.SRC_ALPHA):
                     m.d.comb += ret.eq(src_a)
                 with m.Case(BlendFactor.ONE_MINUS_SRC_ALPHA):
-                    m.d.comb += ret.eq(color_shape.max() - src_a)
+                    m.d.comb += ret.eq(one - src_a)
                 with m.Case(BlendFactor.DST_ALPHA):
                     m.d.comb += ret.eq(dst_a)
                 with m.Case(BlendFactor.ONE_MINUS_DST_ALPHA):
-                    m.d.comb += ret.eq(color_shape.max() - dst_a)
+                    m.d.comb += ret.eq(one - dst_a)
             return ret
 
         with m.FSM():
@@ -549,7 +552,7 @@ class SwapchainOutput(wiring.Component):
                         )
                         + (self.is_fragment.p.coord_pos[0])
                     )
-                    in_data = Signal(data.ArrayLayout(color_shape, 4))
+                    in_data = [Signal(color_shape) for _ in range(4)]
                     m.d.comb += [
                         in_data[i].eq(
                             (self.is_fragment.payload.color[i]).saturate(color_shape)
@@ -557,10 +560,10 @@ class SwapchainOutput(wiring.Component):
                         for i in range(4)
                     ]
                     with m.If(self.conf.enabled):
-                        m.d.sync += src_data.eq(in_data)
+                        m.d.sync += [src_data[i].eq(in_data[i]) for i in range(4)]
                         m.next = "READ_DEST"
                     with m.Else():
-                        m.d.sync += out_data.eq(in_data)
+                        m.d.sync += [out_data[i].eq(in_data[i]) for i in range(4)]
                         m.next = "WRITE_OUTPUT"
 
             with m.State("READ_DEST"):
@@ -572,12 +575,16 @@ class SwapchainOutput(wiring.Component):
                     self.wb_bus.sel.eq(~0),
                 ]
                 with m.If(self.wb_bus.ack):
+                    plain_fp = [Signal(fixed.UQ(8, 0)) for _ in range(4)]
+                    m.d.comb += [
+                        plain_fp[i].eq(self.wb_bus.dat_r.word_select(i, 8))
+                        for i in range(4)
+                    ]
                     m.d.sync += [
                         dst_data[i].eq(
-                            (
-                                self.wb_bus.dat_r.word_select(i, 8)
-                                * fixed.Const(1.0 / 255.0, shape=color_shape)
-                            ).saturate(color_shape)
+                            # approximate conversion from [0,255] to [0,1] fixed-point
+                            (plain_fp[i] >> 8)
+                            + (plain_fp[i] >> 16)
                         )
                         for i in range(4)
                     ]
@@ -591,8 +598,8 @@ class SwapchainOutput(wiring.Component):
                     src_comp = src_rgb[i]
                     dst_comp = dst_rgb[i]
 
-                    src_scaled = Signal(FixedPoint)
-                    dst_scaled = Signal(FixedPoint)
+                    src_scaled = Signal(big_shape)
+                    dst_scaled = Signal(big_shape)
 
                     m.d.comb += [
                         src_scaled.eq(src_comp * src_factor),
@@ -602,15 +609,15 @@ class SwapchainOutput(wiring.Component):
                     with m.Switch(self.conf.blend_op):
                         with m.Case(BlendOp.ADD):
                             m.d.sync += out_data[i].eq(
-                                (src_scaled + dst_scaled).saturate(color_shape)
+                                (src_scaled + dst_scaled).saturate(big_shape)
                             )
                         with m.Case(BlendOp.SUBTRACT):
                             m.d.sync += out_data[i].eq(
-                                (src_scaled - dst_scaled).saturate(color_shape)
+                                (src_scaled - dst_scaled).saturate(big_shape)
                             )
                         with m.Case(BlendOp.REVERSE_SUBTRACT):
                             m.d.sync += out_data[i].eq(
-                                (dst_scaled - src_scaled).saturate(color_shape)
+                                (dst_scaled - src_scaled).saturate(big_shape)
                             )
                         with m.Case(BlendOp.MIN):
                             with m.If(src_comp < dst_comp):
@@ -628,8 +635,8 @@ class SwapchainOutput(wiring.Component):
                 src_a_factor = factor_value(self.conf.src_a_factor)
                 dst_a_factor = factor_value(self.conf.dst_a_factor)
 
-                src_scaled = Signal(FixedPoint)
-                dst_scaled = Signal(FixedPoint)
+                src_scaled = Signal(big_shape)
+                dst_scaled = Signal(big_shape)
 
                 m.d.comb += [
                     src_scaled.eq(src_a * src_a_factor),
@@ -639,15 +646,15 @@ class SwapchainOutput(wiring.Component):
                 with m.Switch(self.conf.blend_a_op):
                     with m.Case(BlendOp.ADD):
                         m.d.sync += out_data[3].eq(
-                            (src_scaled + dst_scaled).saturate(color_shape)
+                            (src_scaled + dst_scaled).saturate(big_shape)
                         )
                     with m.Case(BlendOp.SUBTRACT):
                         m.d.sync += out_data[3].eq(
-                            (src_scaled - dst_scaled).saturate(color_shape)
+                            (src_scaled - dst_scaled).saturate(big_shape)
                         )
                     with m.Case(BlendOp.REVERSE_SUBTRACT):
                         m.d.sync += out_data[3].eq(
-                            (dst_scaled - src_scaled).saturate(color_shape)
+                            (dst_scaled - src_scaled).saturate(big_shape)
                         )
                     with m.Case(BlendOp.MIN):
                         with m.If(src_a < dst_a):
@@ -666,8 +673,9 @@ class SwapchainOutput(wiring.Component):
                 ret_v = Signal(data.ArrayLayout(unsigned(8), 4))
 
                 m.d.comb += [
-                    # Convert from fixed-point [0,1] to [0,255]
-                    ret_v[i].eq(((out_data[i] << 8) - out_data[i]).round())
+                    # Convert from fixed-point [0,1] to [0,255] (*256 - 1)
+                    # here *256 - /8 as a heuristic to only use 9 bit multiplications
+                    ret_v[i].eq(((out_data[i] << 8) - (out_data[i] >> 3)).round())
                     for i in range(4)
                 ]
                 m.d.comb += [
